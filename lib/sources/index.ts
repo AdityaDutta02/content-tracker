@@ -27,8 +27,8 @@ export async function fetchSource(source: SourceRow, channel: ChannelRow): Promi
     case 'ig':
     case 'fb':
     case 'yt': {
-      const key = channel.scraper_byok_key
-      if (!key) throw new Error(`${source.type} source needs Apify BYOK key on channel`)
+      const key = channel.scraper_byok_key ?? process.env.APIFY_API_KEY
+      if (!key) throw new Error(`${source.type} source needs Apify BYOK key (channel.scraper_byok_key or APIFY_API_KEY env)`)
       return apifyRun(source.type, source.handle ?? source.url ?? '', key, {
         actor_id: cfg.actor_id as string,
         input: cfg.input as Record<string, unknown>,

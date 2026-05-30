@@ -40,6 +40,9 @@ async function tryJinaThenFirecrawl(url: string, config: WebConfig): Promise<Fet
   return []
 }
 
+// also used by the channel-level firecrawl tier branch above
+
+
 export async function cheerioExtract(url: string, selector?: string): Promise<FetchedItem[]> {
   const res = await fetch(url, { headers: { 'user-agent': UA }, signal: AbortSignal.timeout(15000) })
   if (!res.ok) throw new Error(`web fetch failed: ${res.status}`)
