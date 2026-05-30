@@ -63,6 +63,8 @@ CREATE TABLE IF NOT EXISTS runs (
   status        TEXT NOT NULL,                  -- ok|partial|failed
   item_count    INT NOT NULL DEFAULT 0,
   credits_used  INT NOT NULL DEFAULT 0,
-  errors        JSONB
+  errors        JSONB,
+  items_json    JSONB NOT NULL DEFAULT '[]'    -- inline top-N items: avoids N+1 dbInsert per run
 );
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS items_json JSONB NOT NULL DEFAULT '[]';
 CREATE INDEX IF NOT EXISTS idx_runs_channel ON runs(channel_id, run_at DESC);

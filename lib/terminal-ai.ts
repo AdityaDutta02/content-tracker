@@ -2,15 +2,10 @@ import config from './validate-config'
 
 const GATEWAY_URL = process.env.TERMINAL_AI_GATEWAY_URL!
 
-async function fetchWithRetry(url: string, options: RequestInit, maxRetries = 3): Promise<Response> {
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
-    const res = await fetch(url, options)
-    if (res.status !== 429) return res
-    const retryAfter = parseInt(res.headers.get('Retry-After') ?? '0', 10)
-    const delayMs = retryAfter > 0 ? retryAfter * 1000 : Math.pow(2, attempt + 1) * 1000
-    await new Promise<void>((r) => setTimeout(r, delayMs))
-  }
-  throw new Error('Gateway is busy. Please try again in a moment.')
+// Single attempt — no retry. Pipeline now batches DB ops to ~5 calls so a 429
+// indicates a real bottleneck; sleeping 60s inside a request only compounds it.
+async function callOnce(url: string, options: RequestInit): Promise<Response> {
+  return fetch(url, options)
 }
 
 interface GenerateResponse {
@@ -30,7 +25,7 @@ export async function callGateway(
   const routing = options?.model
     ? { model: options.model }
     : { category: options?.category ?? config.category, tier: options?.tier ?? config.tier }
-  const res = await fetchWithRetry(`${GATEWAY_URL}/v1/generate`, {
+  const res = await callOnce(`${GATEWAY_URL}/v1/generate`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${embedToken}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ ...routing, messages, ...(options?.system ? { system: options.system } : {}) }),

@@ -2,10 +2,11 @@ import { NextRequest, NextResponse } from 'next/server'
 import { dbList, dbDelete } from '@/lib/db'
 import { getEmbedToken } from '@/lib/auth'
 
-// 30-day item retention. Runs daily at 3am UTC.
-// Note: db SDK has no bulk filter; iterates list+delete. Acceptable at expected volume.
+// 30-day retention. Runs daily at 3am UTC.
+// Items are inline on runs.items_json now, so purging runs purges items too.
+// db SDK has no bulk filter; iterate list+delete. Acceptable at expected volume.
 const ITEM_RETENTION_DAYS = 30
-const RUN_RETENTION_DAYS = 90
+const RUN_RETENTION_DAYS = 30
 
 export async function POST(req: NextRequest) {
   try {

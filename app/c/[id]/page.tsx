@@ -12,15 +12,23 @@ interface Channel {
   last_run_date: string | null
 }
 interface Item {
-  id: string
   title: string
   url: string
   summary: string | null
   published_at: string | null
-  rank: number | null
-  run_date: string
+  rank: number
   final_score: number | null
   ai_relevance: number | null
+  canonical_url: string
+}
+interface Run {
+  id: string
+  run_at: string
+  trigger: string
+  status: string
+  item_count: number
+  credits_used: number
+  items_json: Item[]
 }
 interface Source {
   id: string
@@ -37,25 +45,26 @@ export default function ChannelPage() {
   const params = useParams<{ id: string }>()
   const id = params?.id ?? ''
   const [channel, setChannel] = useState<Channel | null>(null)
-  const [items, setItems] = useState<Item[]>([])
+  const [runs, setRuns] = useState<Run[]>([])
   const [sources, setSources] = useState<Source[]>([])
   const [refreshing, setRefreshing] = useState(false)
   const [refreshMsg, setRefreshMsg] = useState<string | null>(null)
   const [tab, setTab] = useState<'feed' | 'sources'>('feed')
+  const [reloadKey, setReloadKey] = useState(0)
 
   useEffect(() => {
     if (!token || !id) return
     const headers = { Authorization: `Bearer ${token}` }
     Promise.all([
       fetch(`/api/channels/${id}`, { headers }).then((r) => r.json()),
-      fetch(`/api/items?channelId=${id}`, { headers }).then((r) => r.json()),
+      fetch(`/api/runs?channelId=${id}`, { headers }).then((r) => r.json()),
       fetch(`/api/channels/${id}/sources`, { headers }).then((r) => r.json()),
-    ]).then(([c, it, src]) => {
+    ]).then(([c, rn, src]) => {
       setChannel(c.channel)
-      setItems(it.items ?? [])
+      setRuns(rn.runs ?? [])
       setSources(src.sources ?? [])
     })
-  }, [token, id, refreshing])
+  }, [token, id, reloadKey])
 
   async function refresh() {
     if (!token) return
@@ -66,12 +75,14 @@ export default function ChannelPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ embedToken: token }),
+        signal: AbortSignal.timeout(90_000),
       })
       const d = await r.json()
       if (!r.ok) {
         setRefreshMsg(d.error ?? 'Refresh failed')
       } else {
         setRefreshMsg(`Got ${d.item_count} items · ${d.credits_used} credits`)
+        setReloadKey((k) => k + 1)
       }
     } catch (e) {
       setRefreshMsg(e instanceof Error ? e.message : String(e))
@@ -82,8 +93,6 @@ export default function ChannelPage() {
 
   if (!token) return <main className="container"><p className="muted">Loading…</p></main>
   if (!channel) return <main className="container"><p className="muted">Loading channel…</p></main>
-
-  const grouped = groupByDate(items)
 
   return (
     <main className="container stack">
@@ -104,18 +113,24 @@ export default function ChannelPage() {
 
       {tab === 'feed' && (
         <div className="stack">
-          {items.length === 0 && (
+          {runs.length === 0 && (
             <div className="card">
-              <p>No items yet. Hit Refresh, or wait for tomorrow&apos;s 10am run.</p>
+              <p>No runs yet. Hit Refresh, or wait for tomorrow&apos;s 10am cron.</p>
             </div>
           )}
-          {Object.entries(grouped).map(([date, dayItems]) => (
-            <div key={date} className="stack">
-              <h2>{date}</h2>
-              {dayItems.map((it) => (
-                <div key={it.id} className="card">
+          {runs.map((run) => (
+            <div key={run.id} className="stack">
+              <h2>
+                {new Date(run.run_at).toLocaleString()}{' '}
+                <span className={`badge ${run.status === 'ok' ? 'ok' : run.status === 'partial' ? 'warn' : 'err'}`}>
+                  {run.status} · {run.trigger}
+                </span>
+              </h2>
+              {(run.items_json ?? []).length === 0 && <div className="card muted">No items in this run</div>}
+              {(run.items_json ?? []).map((it) => (
+                <div key={`${run.id}:${it.canonical_url}`} className="card">
                   <a href={it.url} target="_blank" rel="noopener noreferrer">
-                    <span className="rank-num">{it.rank ?? '–'}.</span> {it.title}
+                    <span className="rank-num">{it.rank}.</span> {it.title}
                   </a>
                   {it.summary && <div className="muted" style={{ marginTop: 6 }}>{it.summary.slice(0, 200)}</div>}
                   <div className="muted" style={{ marginTop: 6, fontSize: 12 }}>
@@ -168,13 +183,4 @@ export default function ChannelPage() {
 
 function fmt(n: number | null) {
   return n == null ? '–' : n.toFixed(2)
-}
-
-function groupByDate(items: Item[]): Record<string, Item[]> {
-  const out: Record<string, Item[]> = {}
-  for (const it of items) {
-    if (!out[it.run_date]) out[it.run_date] = []
-    out[it.run_date].push(it)
-  }
-  return out
 }

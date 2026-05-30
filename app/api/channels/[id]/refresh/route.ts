@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { dbGet, dbList } from '@/lib/db'
+import { dbGet } from '@/lib/db'
 import { runChannelPipeline } from '@/lib/pipeline'
 import { errorResponse } from '@/lib/api-helpers'
 import { getEmbedToken } from '@/lib/auth'
 import type { ChannelRow } from '@/lib/types'
 
-const RATE_LIMIT_MINUTES = 60
+const HARD_TIMEOUT_MS = 60_000
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   try {
@@ -13,23 +13,21 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const token = getEmbedToken(req, body)
     const channel = await dbGet<ChannelRow>('channels', params.id, token)
 
-    // rate-limit: check last manual run
-    const runs = await dbList<{ run_at: string; trigger: string }>(
-      'runs',
-      { channel_id: channel.id, trigger: 'manual' },
-      token,
+    const pipeline = runChannelPipeline(channel, token, 'manual')
+    const timeout = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(Object.assign(new Error('Pipeline exceeded 60s'), { code: 'TIMEOUT' })), HARD_TIMEOUT_MS),
     )
-    const lastManual = runs
-      .map((r) => new Date(r.run_at).getTime())
-      .sort((a, b) => b - a)[0]
-    if (lastManual && Date.now() - lastManual < RATE_LIMIT_MINUTES * 60 * 1000) {
-      const waitMin = Math.ceil((RATE_LIMIT_MINUTES * 60 * 1000 - (Date.now() - lastManual)) / 60000)
-      return NextResponse.json({ error: `Wait ${waitMin}m before next refresh`, code: 'RATE_LIMIT' }, { status: 429 })
-    }
 
-    const result = await runChannelPipeline(channel, token, 'manual')
+    const result = await Promise.race([pipeline, timeout])
     return NextResponse.json(result)
   } catch (e) {
+    const err = e as Error & { code?: string }
+    if (err.code === 'TIMEOUT') {
+      return NextResponse.json(
+        { error: err.message, code: 'TIMEOUT', hint: 'Pipeline still running in background; check feed in ~1 min.' },
+        { status: 504 },
+      )
+    }
     return errorResponse(e)
   }
 }
