@@ -21,16 +21,29 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const channel = await dbGet<ChannelRow>('channels', params.id, body.embedToken)
 
     const prompt = [
-      'You are a research librarian curating sources for a content channel.',
+      'You are a research librarian curating daily news sources for a content channel.',
       `Niche: "${channel.niche}"`,
+      channel.target_group ? `Target audience: "${channel.target_group}"` : '',
+      channel.description ? `What the feed should cover: "${channel.description}"` : '',
       '',
-      'List 10 top sources that creators in this niche actually read.',
-      'Mix formats: news sites, blogs, X/IG/YT accounts, subreddits, papers, aggregators.',
-      'Prefer sources with public RSS or APIs.',
+      'Find the 10 BEST sources that publish frequently (multiple posts per week) and are widely followed in this niche.',
+      'You MUST return this exact mix:',
+      '  - 4 news/blog websites (with RSS if possible)',
+      '  - 2 X (Twitter) accounts — pick high-signal practitioners or official accounts',
+      '  - 2 Instagram accounts',
+      '  - 2 LinkedIn company pages or creators',
+      '',
+      'For social handles use the full profile URL:',
+      '  - X: https://x.com/<handle>',
+      '  - Instagram: https://instagram.com/<handle>',
+      '  - LinkedIn: https://linkedin.com/company/<slug>  OR  https://linkedin.com/in/<slug>',
+      '',
+      'Skip generic feeds (Medium tag pages, Reddit unless niche-specific subreddit).',
+      'Every source must be real and currently active.',
       '',
       'Return ONLY a JSON array. No prose. Schema:',
-      '[{ "name": string, "url": string, "type_hint": "rss"|"hn"|"reddit"|"arxiv"|"yt"|"x"|"ig"|"fb"|"web", "why": string }]',
-    ].join('\n')
+      '[{ "name": string, "url": string, "type_hint": "rss"|"web"|"x"|"ig"|"linkedin"|"yt"|"reddit", "why": string }]',
+    ].filter(Boolean).join('\n')
 
     const result = await callGateway(
       [{ role: 'user', content: prompt }],

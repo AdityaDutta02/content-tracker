@@ -17,6 +17,8 @@ export default function NewChannelPage() {
   const [step, setStep] = useState<Step>('meta')
   const [name, setName] = useState('')
   const [niche, setNiche] = useState('')
+  const [targetGroup, setTargetGroup] = useState('')
+  const [description, setDescription] = useState('')
   const [timezone, setTimezone] = useState(Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC')
   const [channelId, setChannelId] = useState<string | null>(null)
   const [suggestions, setSuggestions] = useState<Suggestion[]>([])
@@ -33,7 +35,15 @@ export default function NewChannelPage() {
       const r = await fetch('/api/channels', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ embedToken: token, viewerId, name, niche, timezone }),
+        body: JSON.stringify({
+          embedToken: token,
+          viewerId,
+          name,
+          niche,
+          target_group: targetGroup || null,
+          description: description || null,
+          timezone,
+        }),
       })
       const d = await r.json()
       if (!r.ok) throw new Error(d.error ?? 'Failed')
@@ -116,19 +126,35 @@ export default function NewChannelPage() {
             <input value={name} onChange={(e) => setName(e.target.value)} placeholder="AI Coding Digest" />
           </label>
           <label>
-            <div className="muted">Niche (be specific)</div>
-            <textarea
+            <div className="muted">Niche (short, e.g. &quot;AI coding tools&quot;)</div>
+            <input
               value={niche}
               onChange={(e) => setNiche(e.target.value)}
-              placeholder="AI coding tools, LLMs for software engineers, IDE assistants"
-              rows={3}
+              placeholder="AI coding tools"
+            />
+          </label>
+          <label>
+            <div className="muted">Target group (who&apos;s this for?)</div>
+            <input
+              value={targetGroup}
+              onChange={(e) => setTargetGroup(e.target.value)}
+              placeholder="senior software engineers shipping prod LLM apps"
+            />
+          </label>
+          <label>
+            <div className="muted">Description (what should the feed cover?)</div>
+            <textarea
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="Daily news on AI coding assistants, IDE integrations, agent frameworks. Skip hype-only posts. Prefer benchmarks, launches, and dev-team adoption stories."
+              rows={4}
             />
           </label>
           <label>
             <div className="muted">Timezone</div>
             <input value={timezone} onChange={(e) => setTimezone(e.target.value)} />
           </label>
-          <button onClick={createChannel} disabled={loading || !name || niche.length < 5}>
+          <button onClick={createChannel} disabled={loading || !name || niche.length < 2}>
             {loading ? 'Creating…' : 'Next: discover sources'}
           </button>
         </div>

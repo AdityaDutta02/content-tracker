@@ -6,6 +6,8 @@ CREATE TABLE IF NOT EXISTS channels (
   viewer_id           TEXT NOT NULL,
   name                TEXT NOT NULL,
   niche               TEXT NOT NULL,
+  target_group        TEXT,
+  description         TEXT,
   timezone            TEXT NOT NULL DEFAULT 'UTC',
   general_web_search  BOOLEAN NOT NULL DEFAULT false,
   smart_mode          BOOLEAN NOT NULL DEFAULT false,
@@ -67,4 +69,6 @@ CREATE TABLE IF NOT EXISTS runs (
   items_json    JSONB NOT NULL DEFAULT '[]'    -- inline top-N items: avoids N+1 dbInsert per run
 );
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS items_json JSONB NOT NULL DEFAULT '[]';
+ALTER TABLE channels ADD COLUMN IF NOT EXISTS target_group TEXT;
+ALTER TABLE channels ADD COLUMN IF NOT EXISTS description TEXT;
 CREATE INDEX IF NOT EXISTS idx_runs_channel ON runs(channel_id, run_at DESC);

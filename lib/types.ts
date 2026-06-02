@@ -1,4 +1,4 @@
-export type SourceType = 'rss' | 'hn' | 'reddit' | 'arxiv' | 'yt' | 'x' | 'ig' | 'fb' | 'web'
+export type SourceType = 'rss' | 'hn' | 'reddit' | 'arxiv' | 'yt' | 'x' | 'ig' | 'fb' | 'linkedin' | 'web'
 
 export interface FetchedItem {
   external_id: string
@@ -29,6 +29,8 @@ export interface ChannelRow {
   viewer_id: string
   name: string
   niche: string
+  target_group: string | null
+  description: string | null
   timezone: string
   general_web_search: boolean
   smart_mode: boolean

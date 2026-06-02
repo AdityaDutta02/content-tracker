@@ -24,6 +24,11 @@ function matchKnownPlatform(input: string): PlatformMatch | null {
   const fb = url.match(/facebook\.com\/([^/?#]+)/i)
   if (fb) return { type: 'fb', handle: fb[1], scrape_config: {}, tier: 'platform' }
 
+  const liCo = url.match(/linkedin\.com\/(?:company|school|showcase)\/([^/?#]+)/i)
+  if (liCo) return { type: 'linkedin', handle: liCo[1], scrape_config: { kind: 'company' }, tier: 'platform' }
+  const liIn = url.match(/linkedin\.com\/in\/([^/?#]+)/i)
+  if (liIn) return { type: 'linkedin', handle: liIn[1], scrape_config: { kind: 'profile' }, tier: 'platform' }
+
   const reddit = url.match(/reddit\.com\/r\/([^/?#]+)/i)
   if (reddit) return { type: 'reddit', handle: reddit[1], scrape_config: { sort: 'top' }, tier: 'platform' }
 

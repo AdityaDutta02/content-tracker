@@ -8,19 +8,23 @@ const DEFAULT_ACTORS: Record<string, string> = {
   ig: 'apify~instagram-scraper',
   fb: 'apify~facebook-pages-scraper',
   yt: 'streamers~youtube-scraper',
+  linkedin: 'apimaestro~linkedin-company-posts',
 }
+const LINKEDIN_PROFILE_ACTOR = 'harvestapi~linkedin-profile-posts'
 
 export async function apifyRun(
   type: SourceType,
   handle: string,
   apiKey: string,
-  overrides: { actor_id?: string; input?: Record<string, unknown> } = {},
+  overrides: { actor_id?: string; input?: Record<string, unknown>; kind?: string } = {},
 ): Promise<FetchedItem[]> {
   if (!apiKey) throw new Error('apify: missing BYOK key')
-  const actor = overrides.actor_id ?? DEFAULT_ACTORS[type]
+  const kind = overrides.kind
+  let actor = overrides.actor_id ?? DEFAULT_ACTORS[type]
+  if (type === 'linkedin' && kind === 'profile') actor = overrides.actor_id ?? LINKEDIN_PROFILE_ACTOR
   if (!actor) throw new Error(`apify: no actor for ${type}`)
 
-  const input = overrides.input ?? defaultInput(type, handle)
+  const input = overrides.input ?? defaultInput(type, handle, kind)
   const res = await fetch(`https://api.apify.com/v2/acts/${actor}/run-sync-get-dataset-items?token=${apiKey}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -32,7 +36,7 @@ export async function apifyRun(
   return items.map((r) => normalizeApify(type, r))
 }
 
-function defaultInput(type: SourceType, handle: string): Record<string, unknown> {
+function defaultInput(type: SourceType, handle: string, kind?: string): Record<string, unknown> {
   switch (type) {
     case 'x':
       return { handles: [handle.replace(/^@/, '')], maxItems: 25 }
@@ -42,6 +46,11 @@ function defaultInput(type: SourceType, handle: string): Record<string, unknown>
       return { startUrls: [{ url: `https://www.facebook.com/${handle}` }], maxPosts: 25 }
     case 'yt':
       return { startUrls: [{ url: `https://www.youtube.com/@${handle.replace(/^@/, '')}/videos` }], maxResults: 25 }
+    case 'linkedin':
+      if (kind === 'profile') {
+        return { profileUrls: [`https://www.linkedin.com/in/${handle}`], maxPosts: 25 }
+      }
+      return { companyUrls: [`https://www.linkedin.com/company/${handle}`], maxPosts: 25 }
     default:
       return {}
   }
