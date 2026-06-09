@@ -15,6 +15,7 @@ export default function HomePage() {
   const { token, viewerId } = useViewer()
   const [channels, setChannels] = useState<Channel[] | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
 
   useEffect(() => {
     if (!token || !viewerId) return
@@ -28,6 +29,27 @@ export default function HomePage() {
       })
       .catch((e) => setError(String(e)))
   }, [token, viewerId])
+
+  async function deleteChannel(id: string, name: string) {
+    if (!token) return
+    if (!confirm(`Delete channel "${name}"? All sources and feed history will be removed.`)) return
+    setDeletingId(id)
+    try {
+      const r = await fetch(`/api/channels/${id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}))
+        throw new Error(d.error ?? `Delete failed (${r.status})`)
+      }
+      setChannels((cur) => (cur ?? []).filter((c) => c.id !== id))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setDeletingId(null)
+    }
+  }
 
   if (!token) return <main className="container"><p className="muted">Loading…</p></main>
 
@@ -45,15 +67,29 @@ export default function HomePage() {
         </div>
       )}
       {channels?.map((c) => (
-        <Link key={c.id} href={`/c/${c.id}`} style={{ display: 'block' }}>
-          <div className="card">
-            <div style={{ fontWeight: 600, fontSize: 16 }}>{c.name}</div>
-            <div className="muted">{c.niche}</div>
-            <div className="muted" style={{ marginTop: 4 }}>
-              {c.timezone} · last run {c.last_run_date ?? 'never'}
-            </div>
+        <div key={c.id} className="card">
+          <div className="row" style={{ justifyContent: 'space-between', alignItems: 'flex-start' }}>
+            <Link href={`/c/${c.id}`} style={{ flex: 1, display: 'block' }}>
+              <div style={{ fontWeight: 600, fontSize: 16 }}>{c.name}</div>
+              <div className="muted">{c.niche}</div>
+              <div className="muted" style={{ marginTop: 4 }}>
+                {c.timezone} · last run {c.last_run_date ?? 'never'}
+              </div>
+            </Link>
+            <button
+              className="secondary"
+              onClick={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                deleteChannel(c.id, c.name)
+              }}
+              disabled={deletingId === c.id}
+              style={{ marginLeft: 12 }}
+            >
+              {deletingId === c.id ? 'Deleting…' : 'Delete'}
+            </button>
           </div>
-        </Link>
+        </div>
       ))}
     </main>
   )
