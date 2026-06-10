@@ -62,12 +62,14 @@ export default function HomePage() {
       {error && <div className="card" style={{ borderColor: '#c33' }}>{error}</div>}
       {channels === null && <p className="muted">Loading channels…</p>}
       {channels?.length === 0 && (
-        <div className="card">
-          <p>No channels yet. Create one to start tracking news for your niche.</p>
+        <div className="empty">
+          <h3>No channels yet</h3>
+          <p className="muted">Create one to start tracking news for your niche.</p>
+          <Link href="/c/new"><button>+ Create your first channel</button></Link>
         </div>
       )}
       {channels?.map((c) => (
-        <div key={c.id} className="card">
+        <div key={c.id} className="card channel">
           <div className="row" style={{ justifyContent: 'space-between', alignItems: 'flex-start' }}>
             <Link href={`/c/${c.id}`} style={{ flex: 1, display: 'block' }}>
               <div style={{ fontWeight: 600, fontSize: 16 }}>{c.name}</div>
@@ -77,7 +79,7 @@ export default function HomePage() {
               </div>
             </Link>
             <button
-              className="secondary"
+              className="danger"
               onClick={(e) => {
                 e.preventDefault()
                 e.stopPropagation()

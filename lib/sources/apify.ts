@@ -29,7 +29,7 @@ export async function apifyRun(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(input),
-    signal: AbortSignal.timeout(120000),
+    signal: AbortSignal.timeout(40000),
   })
   if (!res.ok) throw new Error(`Apify ${actor} failed: ${res.status}`)
   const items = (await res.json()) as Array<Record<string, unknown>>

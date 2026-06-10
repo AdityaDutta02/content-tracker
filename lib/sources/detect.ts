@@ -28,6 +28,13 @@ function matchKnownPlatform(input: string): PlatformMatch | null {
   if (liCo) return { type: 'linkedin', handle: liCo[1], scrape_config: { kind: 'company' }, tier: 'platform' }
   const liIn = url.match(/linkedin\.com\/in\/([^/?#]+)/i)
   if (liIn) return { type: 'linkedin', handle: liIn[1], scrape_config: { kind: 'profile' }, tier: 'platform' }
+  const liPosts = url.match(/linkedin\.com\/(?:in|company|school|showcase)\/([^/?#]+)\/(?:recent-activity|posts)/i)
+  if (liPosts) return { type: 'linkedin', handle: liPosts[1], scrape_config: { kind: 'profile' }, tier: 'platform' }
+  // bare linkedin.com/<slug> (not feed/login/jobs/etc — those are non-handle paths)
+  const liBare = url.match(/^(?:https?:\/\/)?(?:www\.)?linkedin\.com\/([^/?#]+)\/?$/i)
+  if (liBare && !/^(feed|login|signup|jobs|learning|notifications|messaging|mynetwork|search|help)$/i.test(liBare[1])) {
+    return { type: 'linkedin', handle: liBare[1], scrape_config: { kind: 'profile' }, tier: 'platform' }
+  }
 
   const reddit = url.match(/reddit\.com\/r\/([^/?#]+)/i)
   if (reddit) return { type: 'reddit', handle: reddit[1], scrape_config: { sort: 'top' }, tier: 'platform' }
@@ -89,5 +96,12 @@ export async function detectSource(input: string): Promise<DetectionResult> {
     /* ignore */
   }
 
-  return { type: 'web', url, scrape_config: { tier: 'firecrawl' }, tier: 'firecrawl_required', needs_byok: true }
+  const hasFirecrawl = !!process.env.FIRECRAWL_API_KEY
+  return {
+    type: 'web',
+    url,
+    scrape_config: { tier: 'firecrawl' },
+    tier: 'firecrawl_required',
+    needs_byok: !hasFirecrawl,
+  }
 }

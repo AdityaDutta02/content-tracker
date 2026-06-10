@@ -25,6 +25,7 @@ export default function NewChannelPage() {
   const [picked, setPicked] = useState<Record<number, boolean>>({})
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [saveResults, setSaveResults] = useState<Record<number, 'ok' | string>>({})
 
   if (!token || !viewerId) return <main className="container"><p className="muted">Loading…</p></main>
 
@@ -85,28 +86,57 @@ export default function NewChannelPage() {
     if (!channelId) return
     setLoading(true)
     setError(null)
+    setSaveResults({})
     try {
       const chosen = suggestions
         .map((s, i) => ({ s, i }))
         .filter(({ i }) => picked[i] && suggestions[i].detection)
-      await Promise.all(
-        chosen.map(({ s }) =>
-          fetch(`/api/channels/${channelId}/sources`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              embedToken: token,
-              type: s.detection!.type,
-              url: s.detection!.url ?? s.suggestion.url,
-              handle: s.detection!.handle ?? null,
-              label: s.suggestion.name,
-              scrape_config: s.detection!.scrape_config,
-              added_by: 'ai_discovery',
-            }),
-          }),
-        ),
+      const results = await Promise.all(
+        chosen.map(async ({ s, i }) => {
+          try {
+            const r = await fetch(`/api/channels/${channelId}/sources`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                embedToken: token,
+                type: s.detection!.type,
+                url: s.detection!.url ?? s.suggestion.url,
+                handle: s.detection!.handle ?? null,
+                label: s.suggestion.name,
+                scrape_config: s.detection!.scrape_config,
+                added_by: 'ai_discovery',
+              }),
+            })
+            if (!r.ok) {
+              const d = await r.json().catch(() => ({}))
+              return { i, status: (d.error as string) ?? `HTTP ${r.status}` }
+            }
+            return { i, status: 'ok' as const }
+          } catch (e) {
+            return { i, status: e instanceof Error ? e.message : String(e) }
+          }
+        }),
       )
-      router.push(`/c/${channelId}`)
+      const next: Record<number, 'ok' | string> = {}
+      let okCount = 0
+      let failCount = 0
+      for (const { i, status } of results) {
+        next[i] = status
+        if (status === 'ok') okCount++
+        else failCount++
+      }
+      setSaveResults(next)
+      if (failCount > 0) {
+        setError(`${okCount}/${results.length} saved. ${failCount} failed — see details below.`)
+        if (okCount === 0) return
+      }
+      // trigger first refresh in background, navigate with poll hint
+      fetch(`/api/channels/${channelId}/refresh`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ embedToken: token }),
+      }).catch(() => undefined)
+      router.push(`/c/${channelId}?initialRefresh=1`)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -188,6 +218,10 @@ export default function NewChannelPage() {
                       </span>
                     ) : (
                       <span className="badge err">unreachable</span>
+                    )}
+                    {saveResults[i] === 'ok' && <span className="badge ok" style={{ marginLeft: 6 }}>✓ saved</span>}
+                    {saveResults[i] && saveResults[i] !== 'ok' && (
+                      <span className="badge err" style={{ marginLeft: 6 }}>✗ {saveResults[i]}</span>
                     )}
                   </div>
                 </div>

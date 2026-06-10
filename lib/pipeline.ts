@@ -14,6 +14,28 @@ import { dbList, dbInsert, dbUpdate } from './db'
 const TOP_N = 10
 const RECENT_RUNS_FOR_DEDUPE = 7  // look back N most recent runs to dedupe by canonical URL
 
+// Per-source-type hard ceiling so one slow fetcher cannot hang the whole pipeline.
+const SOURCE_TIMEOUT_MS: Record<string, number> = {
+  rss: 20_000,
+  hn: 20_000,
+  reddit: 20_000,
+  arxiv: 20_000,
+  web: 35_000,
+  x: 45_000,
+  ig: 45_000,
+  fb: 45_000,
+  yt: 45_000,
+  linkedin: 45_000,
+}
+const DEFAULT_SOURCE_TIMEOUT_MS = 30_000
+
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)
+    p.then((v) => { clearTimeout(t); resolve(v) }, (e) => { clearTimeout(t); reject(e) })
+  })
+}
+
 export interface RunResult {
   status: 'ok' | 'partial' | 'failed'
   item_count: number
@@ -47,8 +69,9 @@ export async function runChannelPipeline(
   const raw: Array<FetchedItem & { source_id: string }> = []
   await Promise.all(
     sources.map(async (s) => {
+      const ms = SOURCE_TIMEOUT_MS[s.type] ?? DEFAULT_SOURCE_TIMEOUT_MS
       try {
-        const items = await fetchSource(s, channel)
+        const items = await withTimeout(fetchSource(s, channel), ms, `source ${s.type}:${s.id}`)
         for (const it of items) raw.push({ ...it, source_id: s.id })
       } catch (e) {
         errors.push({ source_id: s.id, error: e instanceof Error ? e.message : String(e) })

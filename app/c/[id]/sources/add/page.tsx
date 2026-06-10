@@ -1,6 +1,7 @@
 'use client'
 import { useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
+import Link from 'next/link'
 import { useViewer } from '@/hooks/use-viewer'
 
 interface Detection {
@@ -78,7 +79,10 @@ export default function AddSourcePage() {
 
   return (
     <main className="container stack">
-      <h1>Add source</h1>
+      <div className="row" style={{ justifyContent: 'space-between' }}>
+        <h1 style={{ margin: 0 }}>Add source</h1>
+        <Link href={`/c/${channelId}`}><button className="secondary">Back</button></Link>
+      </div>
       {error && <div className="card" style={{ borderColor: '#c33' }}>{error}</div>}
 
       <div className="card stack">
