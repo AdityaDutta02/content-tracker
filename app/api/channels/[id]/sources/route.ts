@@ -8,9 +8,9 @@ import type { SourceRow, SourceType } from '@/lib/types'
 const CreateSchema = z.object({
   embedToken: z.string().min(1),
   type: z.enum(['rss', 'hn', 'reddit', 'arxiv', 'yt', 'x', 'ig', 'fb', 'linkedin', 'web']),
-  url: z.string().optional(),
-  handle: z.string().optional(),
-  label: z.string().optional(),
+  url: z.string().nullable().optional(),
+  handle: z.string().nullable().optional(),
+  label: z.string().nullable().optional(),
   scrape_config: z.record(z.unknown()).default({}),
   added_by: z.enum(['ai_discovery', 'user_custom']).default('user_custom'),
 })
