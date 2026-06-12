@@ -7,7 +7,7 @@ import type { SourceRow, SourceType } from '@/lib/types'
 
 const CreateSchema = z.object({
   embedToken: z.string().min(1),
-  type: z.enum(['rss', 'hn', 'reddit', 'arxiv', 'yt', 'x', 'ig', 'fb', 'web']),
+  type: z.enum(['rss', 'hn', 'reddit', 'arxiv', 'yt', 'x', 'ig', 'fb', 'linkedin', 'web']),
   url: z.string().optional(),
   handle: z.string().optional(),
   label: z.string().optional(),

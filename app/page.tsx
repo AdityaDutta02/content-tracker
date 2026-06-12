@@ -15,6 +15,7 @@ export default function HomePage() {
   const { token, viewerId } = useViewer()
   const [channels, setChannels] = useState<Channel[] | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [confirmId, setConfirmId] = useState<string | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
 
   useEffect(() => {
@@ -30,10 +31,10 @@ export default function HomePage() {
       .catch((e) => setError(String(e)))
   }, [token, viewerId])
 
-  async function deleteChannel(id: string, name: string) {
+  async function deleteChannel(id: string) {
     if (!token) return
-    if (!confirm(`Delete channel "${name}"? All sources and feed history will be removed.`)) return
     setDeletingId(id)
+    setError(null)
     try {
       const r = await fetch(`/api/channels/${id}`, {
         method: 'DELETE',
@@ -44,6 +45,7 @@ export default function HomePage() {
         throw new Error(d.error ?? `Delete failed (${r.status})`)
       }
       setChannels((cur) => (cur ?? []).filter((c) => c.id !== id))
+      setConfirmId(null)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -78,18 +80,33 @@ export default function HomePage() {
                 {c.timezone} · last run {c.last_run_date ?? 'never'}
               </div>
             </Link>
-            <button
-              className="danger"
-              onClick={(e) => {
-                e.preventDefault()
-                e.stopPropagation()
-                deleteChannel(c.id, c.name)
-              }}
-              disabled={deletingId === c.id}
-              style={{ marginLeft: 12 }}
-            >
-              {deletingId === c.id ? 'Deleting…' : 'Delete'}
-            </button>
+            {confirmId === c.id ? (
+              <div className="confirm-row" style={{ marginLeft: 12 }}>
+                <span className="muted">Delete?</span>
+                <button
+                  className="danger"
+                  onClick={() => deleteChannel(c.id)}
+                  disabled={deletingId === c.id}
+                >
+                  {deletingId === c.id ? 'Deleting…' : 'Yes'}
+                </button>
+                <button
+                  className="secondary"
+                  onClick={() => setConfirmId(null)}
+                  disabled={deletingId === c.id}
+                >
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <button
+                className="danger"
+                onClick={() => setConfirmId(c.id)}
+                style={{ marginLeft: 12 }}
+              >
+                Delete
+              </button>
+            )}
           </div>
         </div>
       ))}

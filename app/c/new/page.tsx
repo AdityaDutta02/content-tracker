@@ -127,8 +127,8 @@ export default function NewChannelPage() {
       }
       setSaveResults(next)
       if (failCount > 0) {
-        setError(`${okCount}/${results.length} saved. ${failCount} failed — see details below.`)
-        if (okCount === 0) return
+        setError(`${okCount}/${results.length} saved. ${failCount} failed — review the badges below, then continue.`)
+        return // do not auto-navigate; user must dismiss to proceed
       }
       // trigger first refresh in background, navigate with poll hint
       fetch(`/api/channels/${channelId}/refresh`, {
@@ -191,7 +191,22 @@ export default function NewChannelPage() {
       )}
 
       {step === 'discover' && (
-        <div className="card"><p className="muted">Asking AI to find top sources for your niche…</p></div>
+        <div className="stack">
+          <div className="card">
+            <p><span className="spinner" />Asking AI to find top sources for your niche…</p>
+            <p className="muted">Usually 15–30s. We&apos;re scanning RSS, news sites, Reddit, YouTube, X, LinkedIn, and more.</p>
+          </div>
+          <div className="card">
+            <div className="skeleton" style={{ width: '60%' }} />
+            <div className="skeleton" style={{ width: '85%' }} />
+            <div className="skeleton tall" />
+          </div>
+          <div className="card">
+            <div className="skeleton" style={{ width: '55%' }} />
+            <div className="skeleton" style={{ width: '80%' }} />
+            <div className="skeleton tall" />
+          </div>
+        </div>
       )}
 
       {step === 'review' && (
@@ -228,9 +243,27 @@ export default function NewChannelPage() {
               </label>
             </div>
           ))}
-          <button onClick={saveSources} disabled={loading}>
-            {loading ? 'Saving…' : `Save ${Object.values(picked).filter(Boolean).length} sources`}
-          </button>
+          <div className="row">
+            <button onClick={saveSources} disabled={loading}>
+              {loading ? 'Saving…' : `Save ${Object.values(picked).filter(Boolean).length} sources`}
+            </button>
+            {Object.values(saveResults).some((v) => v === 'ok') && (
+              <button
+                className="secondary"
+                onClick={() => {
+                  if (!channelId) return
+                  fetch(`/api/channels/${channelId}/refresh`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ embedToken: token }),
+                  }).catch(() => undefined)
+                  router.push(`/c/${channelId}?initialRefresh=1`)
+                }}
+              >
+                Continue to channel →
+              </button>
+            )}
+          </div>
         </div>
       )}
     </main>

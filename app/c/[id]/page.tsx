@@ -161,8 +161,19 @@ export default function ChannelPage() {
             <div key={run.id} className="stack">
               <h2>
                 {new Date(run.run_at).toLocaleString()}{' '}
-                <span className={`badge ${run.status === 'ok' ? 'ok' : run.status === 'partial' ? 'warn' : 'err'}`}>
-                  {run.status} · {run.trigger}
+                <span
+                  className={`badge ${
+                    run.item_count > 0 && run.status === 'ok'
+                      ? 'ok'
+                      : run.item_count > 0
+                        ? 'warn'
+                        : 'err'
+                  }`}
+                  title={`status: ${run.status} · trigger: ${run.trigger}`}
+                >
+                  {run.item_count > 0
+                    ? `${run.item_count} items · ${run.trigger}`
+                    : `no items · ${run.trigger}`}
                 </span>
               </h2>
               {(run.items_json ?? []).length === 0 && <div className="card muted">No items in this run</div>}
