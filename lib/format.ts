@@ -60,9 +60,10 @@ export function cleanSummary(raw: string | null): string {
   return raw.replace(READ_TIME_SUFFIX, '').trim()
 }
 
-// Open a URL reliably from inside an embedded iframe. target="_blank" silently
-// fails when the host iframe lacks allow-popups; fall back to navigating the
-// top frame so the user at least reaches the article.
+// Best-effort "open in new tab" from inside an embedded iframe.
+// Never navigates the current frame — losing the user's place in the app
+// is worse than the link not working. Tries a real popup first; if the
+// host sandbox blocks it, asks the parent shell to open it via postMessage.
 export function openExternal(url: string): void {
   try {
     const w = window.open(url, '_blank', 'noopener,noreferrer')
@@ -71,12 +72,8 @@ export function openExternal(url: string): void {
     /* popup blocked — fall through */
   }
   try {
-    if (window.top && window.top !== window) {
-      window.top.location.href = url
-      return
-    }
+    window.parent?.postMessage({ type: 'TERMINAL_AI_OPEN_URL', url, target: '_blank' }, '*')
   } catch {
-    /* cross-origin top frame — fall through */
+    /* cross-origin parent — nothing else to do */
   }
-  window.location.href = url
 }

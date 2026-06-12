@@ -285,13 +285,26 @@ function FeedItem({ item, rank }: { item: Item; rank: number }) {
       {expanded && (
         <div className="feed-expand">
           {item.summary && <p className="feed-summary">{item.summary}</p>}
-          <button
-            type="button"
+          <a
+            href={item.url}
+            target="_blank"
+            rel="noopener noreferrer"
             className="feed-open"
-            onClick={(e) => { e.stopPropagation(); openExternal(item.url) }}
+            onClick={(e) => {
+              e.stopPropagation()
+              // Plain left-click without modifiers: take over so we can route
+              // through the postMessage fallback if the iframe sandbox blocks
+              // a real popup. Middle-click / cmd-click / right-click never
+              // trigger onClick, so the anchor's native target="_blank"
+              // continues to handle those.
+              if (e.button === 0 && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+                e.preventDefault()
+                openExternal(item.url)
+              }
+            }}
           >
             Open original ↗
-          </button>
+          </a>
         </div>
       )}
     </li>
