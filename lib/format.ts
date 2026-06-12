@@ -36,3 +36,47 @@ export function absoluteTime(iso: string): string {
     minute: '2-digit',
   })
 }
+
+// Source feeds often inject metadata into text fields:
+//   - RSS titles prefixed with "Jun 10", "2025-06-10", "[Jun 10]"
+//   - Summaries suffixed with "9 min read", "5 minute read"
+// These look like real content but are noise. Strip them before render.
+const DATE_PREFIX = /^\s*(?:\[)?(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2}(?:,\s*\d{4})?(?:\])?\s*[-:·•|]?\s*/i
+const ISO_PREFIX = /^\s*\d{4}-\d{2}-\d{2}\s*[-:·•|]?\s*/
+const READ_TIME_SUFFIX = /\s*[·•|-]?\s*\d+\s*(?:min(?:ute)?s?)\s*read\s*\.?\s*$/i
+
+export function cleanTitle(raw: string): string {
+  let t = (raw ?? '').trim()
+  for (let i = 0; i < 3 && t; i++) {
+    const before = t
+    t = t.replace(DATE_PREFIX, '').replace(ISO_PREFIX, '').trim()
+    if (t === before) break
+  }
+  return t
+}
+
+export function cleanSummary(raw: string | null): string {
+  if (!raw) return ''
+  return raw.replace(READ_TIME_SUFFIX, '').trim()
+}
+
+// Open a URL reliably from inside an embedded iframe. target="_blank" silently
+// fails when the host iframe lacks allow-popups; fall back to navigating the
+// top frame so the user at least reaches the article.
+export function openExternal(url: string): void {
+  try {
+    const w = window.open(url, '_blank', 'noopener,noreferrer')
+    if (w) return
+  } catch {
+    /* popup blocked — fall through */
+  }
+  try {
+    if (window.top && window.top !== window) {
+      window.top.location.href = url
+      return
+    }
+  } catch {
+    /* cross-origin top frame — fall through */
+  }
+  window.location.href = url
+}

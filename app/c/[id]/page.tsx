@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useSearchParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { useViewer } from '@/hooks/use-viewer'
-import { hostname, faviconUrl, relativeTime, absoluteTime } from '@/lib/format'
+import { hostname, faviconUrl, relativeTime, absoluteTime, cleanTitle, cleanSummary, openExternal } from '@/lib/format'
 
 interface Channel {
   id: string
@@ -132,7 +132,9 @@ export default function ChannelPage() {
     return runs
       .map((run) => ({
         ...run,
-        items: (run.items_json ?? []).filter((it) => it.title?.trim() && it.url?.trim()),
+        items: (run.items_json ?? [])
+          .map((it) => ({ ...it, title: cleanTitle(it.title), summary: cleanSummary(it.summary) }))
+          .filter((it) => it.title && it.url?.trim()),
       }))
       .filter((r) => r.items.length > 0)
   }, [runs])
@@ -269,10 +271,10 @@ function FeedItem({ item, rank }: { item: Item; rank: number }) {
           <span className="feed-title">{item.title}</span>
           <span className="feed-meta">
             <img className="feed-favicon" src={faviconUrl(host)} alt="" width={14} height={14} />
-            <span>{host}</span>
+            <span className="feed-host">{host}</span>
             {item.published_at && (
               <>
-                <span aria-hidden>·</span>
+                <span className="feed-dot" aria-hidden>·</span>
                 <span title={absoluteTime(item.published_at)}>{relativeTime(item.published_at)}</span>
               </>
             )}
@@ -282,8 +284,14 @@ function FeedItem({ item, rank }: { item: Item; rank: number }) {
       </button>
       {expanded && (
         <div className="feed-expand">
-          {item.summary && <p>{item.summary}</p>}
-          <a href={item.url} target="_blank" rel="noopener noreferrer">Open original ↗</a>
+          {item.summary && <p className="feed-summary">{item.summary}</p>}
+          <button
+            type="button"
+            className="feed-open"
+            onClick={(e) => { e.stopPropagation(); openExternal(item.url) }}
+          >
+            Open original ↗
+          </button>
         </div>
       )}
     </li>
