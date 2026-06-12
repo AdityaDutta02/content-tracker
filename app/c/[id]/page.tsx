@@ -1,8 +1,9 @@
 'use client'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useSearchParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { useViewer } from '@/hooks/use-viewer'
+import { hostname, faviconUrl, relativeTime, absoluteTime } from '@/lib/format'
 
 interface Channel {
   id: string
@@ -55,6 +56,7 @@ export default function ChannelPage() {
   const [tab, setTab] = useState<'feed' | 'sources'>('feed')
   const [reloadKey, setReloadKey] = useState(0)
   const [buildingFirstFeed, setBuildingFirstFeed] = useState(initialRefresh)
+  const [showHistory, setShowHistory] = useState(false)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   useEffect(() => {
@@ -123,8 +125,23 @@ export default function ChannelPage() {
     }
   }
 
+  // Build the display list: filter out empty items per run, then drop runs that
+  // have nothing left to show. Keep them sorted newest-first (the API already
+  // returns runs ordered by run_at desc).
+  const visibleRuns = useMemo(() => {
+    return runs
+      .map((run) => ({
+        ...run,
+        items: (run.items_json ?? []).filter((it) => it.title?.trim() && it.url?.trim()),
+      }))
+      .filter((r) => r.items.length > 0)
+  }, [runs])
+
   if (!token) return <main className="container"><p className="muted">Loading…</p></main>
   if (!channel) return <main className="container"><p className="muted">Loading channel…</p></main>
+
+  const latestRun = visibleRuns[0]
+  const olderRuns = visibleRuns.slice(1)
 
   return (
     <main className="container stack">
@@ -147,50 +164,39 @@ export default function ChannelPage() {
 
       {tab === 'feed' && (
         <div className="stack">
-          {buildingFirstFeed && runs.length === 0 && (
+          {buildingFirstFeed && visibleRuns.length === 0 && (
             <div className="card">
-              <p>Building your first feed… <span className="muted">(usually 20–60s)</span></p>
+              <p><span className="spinner" />Building your first feed… <span className="muted">(usually 20–60s)</span></p>
             </div>
           )}
-          {!buildingFirstFeed && runs.length === 0 && (
+          {!buildingFirstFeed && visibleRuns.length === 0 && (
             <div className="card">
-              <p>No runs yet. Hit Refresh, or wait for tomorrow&apos;s 10am cron.</p>
+              <p>No items yet. Hit Refresh, or wait for tomorrow&apos;s 10am cron.</p>
             </div>
           )}
-          {runs.map((run) => (
-            <div key={run.id} className="stack">
-              <h2>
-                {new Date(run.run_at).toLocaleString()}{' '}
-                <span
-                  className={`badge ${
-                    run.item_count > 0 && run.status === 'ok'
-                      ? 'ok'
-                      : run.item_count > 0
-                        ? 'warn'
-                        : 'err'
-                  }`}
-                  title={`status: ${run.status} · trigger: ${run.trigger}`}
-                >
-                  {run.item_count > 0
-                    ? `${run.item_count} items · ${run.trigger}`
-                    : `no items · ${run.trigger}`}
-                </span>
-              </h2>
-              {(run.items_json ?? []).length === 0 && <div className="card muted">No items in this run</div>}
-              {(run.items_json ?? []).map((it) => (
-                <div key={`${run.id}:${it.canonical_url}`} className="card run">
-                  <a href={it.url} target="_blank" rel="noopener noreferrer">
-                    <span className="rank-num">{it.rank}.</span> {it.title}
-                  </a>
-                  {it.summary && <div className="muted" style={{ marginTop: 6 }}>{it.summary.slice(0, 200)}</div>}
-                  <div className="muted" style={{ marginTop: 6, fontSize: 12 }}>
-                    rel {fmt(it.ai_relevance)} · score {fmt(it.final_score)}
-                    {it.published_at && ` · ${new Date(it.published_at).toLocaleString()}`}
-                  </div>
-                </div>
+
+          {latestRun && (
+            <RunBlock label={`Latest · ${relativeTime(latestRun.run_at)}`} runAt={latestRun.run_at} items={latestRun.items} />
+          )}
+
+          {olderRuns.length > 0 && (
+            <div className="stack">
+              <button
+                className="secondary older-toggle"
+                onClick={() => setShowHistory((v) => !v)}
+              >
+                {showHistory ? '− Hide history' : `+ ${olderRuns.length} earlier run${olderRuns.length === 1 ? '' : 's'}`}
+              </button>
+              {showHistory && olderRuns.map((run) => (
+                <RunBlock
+                  key={run.id}
+                  label={relativeTime(run.run_at)}
+                  runAt={run.run_at}
+                  items={run.items}
+                />
               ))}
             </div>
-          ))}
+          )}
         </div>
       )}
 
@@ -231,6 +237,55 @@ export default function ChannelPage() {
   )
 }
 
-function fmt(n: number | null) {
-  return n == null ? '–' : n.toFixed(2)
+function RunBlock({ label, runAt, items }: { label: string; runAt: string; items: Item[] }) {
+  return (
+    <section className="run-block">
+      <header className="run-header">
+        <span className="run-label">{label}</span>
+        <span className="muted" title={absoluteTime(runAt)}>{items.length} item{items.length === 1 ? '' : 's'}</span>
+      </header>
+      <ol className="feed-list">
+        {items.map((it, idx) => (
+          <FeedItem key={it.canonical_url} item={it} rank={idx + 1} />
+        ))}
+      </ol>
+    </section>
+  )
+}
+
+function FeedItem({ item, rank }: { item: Item; rank: number }) {
+  const [expanded, setExpanded] = useState(false)
+  const host = hostname(item.url)
+  return (
+    <li className={`feed-item${expanded ? ' expanded' : ''}`}>
+      <button
+        type="button"
+        className="feed-row"
+        onClick={() => setExpanded((v) => !v)}
+        aria-expanded={expanded}
+      >
+        <span className="feed-rank">{rank}</span>
+        <span className="feed-body">
+          <span className="feed-title">{item.title}</span>
+          <span className="feed-meta">
+            <img className="feed-favicon" src={faviconUrl(host)} alt="" width={14} height={14} />
+            <span>{host}</span>
+            {item.published_at && (
+              <>
+                <span aria-hidden>·</span>
+                <span title={absoluteTime(item.published_at)}>{relativeTime(item.published_at)}</span>
+              </>
+            )}
+          </span>
+        </span>
+        <span className="feed-chev" aria-hidden>{expanded ? '−' : '+'}</span>
+      </button>
+      {expanded && (
+        <div className="feed-expand">
+          {item.summary && <p>{item.summary}</p>}
+          <a href={item.url} target="_blank" rel="noopener noreferrer">Open original ↗</a>
+        </div>
+      )}
+    </li>
+  )
 }
