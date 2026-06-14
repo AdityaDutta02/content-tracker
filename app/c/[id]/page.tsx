@@ -193,7 +193,7 @@ export default function ChannelPage() {
           )}
           {!buildingFirstFeed && visibleRuns.length === 0 && (
             <div className="card">
-              <p>No items yet. Hit Refresh, or wait for tomorrow&apos;s 10am cron.</p>
+              <p>Nothing fresh in the last 3 days. Hit Refresh, add more sources, or wait for tomorrow&apos;s 10am cron.</p>
             </div>
           )}
 

@@ -13,6 +13,8 @@ import { dbList, dbInsert, dbUpdate } from './db'
 
 const TOP_N = 12
 const RECENT_RUNS_FOR_DEDUPE = 7
+const MAX_AGE_DAYS = 3
+const MAX_AGE_MS = MAX_AGE_DAYS * 24 * 60 * 60 * 1000
 
 const SOURCE_TIMEOUT_MS: Record<string, number> = {
   rss: 20_000,
@@ -87,7 +89,20 @@ export async function runChannelPipeline(
     .slice(0, RECENT_RUNS_FOR_DEDUPE)
     .forEach((r) => (r.items_json ?? []).forEach((it) => seenUrls.add(it.canonical_url)))
 
-  const fresh = raw.filter((r) => r.url && !seenUrls.has(r.url))
+  // Strict freshness gate. Drop anything without a parseable published date
+  // OR older than MAX_AGE_DAYS. A feed that never sets pubDate (lots of bare
+  // sitemaps and AI-extracted web pages) gets nothing in the run — better an
+  // empty card than 3-year-old marketing copy showing as "JUST NOW".
+  const now = Date.now()
+  const fresh = raw.filter((r) => {
+    if (!r.url || seenUrls.has(r.url)) return false
+    if (!r.published_at) return false
+    const t = new Date(r.published_at).getTime()
+    if (!Number.isFinite(t)) return false
+    if (now - t > MAX_AGE_MS) return false
+    if (t - now > 24 * 60 * 60 * 1000) return false  // future-dated junk
+    return true
+  })
 
   // In-run dedupe by canonical URL (keep first seen, which carries source_id).
   const seenThisRun = new Set<string>()
@@ -98,10 +113,10 @@ export async function runChannelPipeline(
     deduped.push(it)
   }
 
-  // Chronological newest-first. Items with no published_at sink to bottom.
+  // Chronological newest-first.
   deduped.sort((a, b) => {
-    const ta = a.published_at ? new Date(a.published_at).getTime() : 0
-    const tb = b.published_at ? new Date(b.published_at).getTime() : 0
+    const ta = new Date(a.published_at!).getTime()
+    const tb = new Date(b.published_at!).getTime()
     return tb - ta
   })
 
@@ -202,7 +217,9 @@ async function summarizeBatch(
 ): Promise<{ summaries: string[]; credits: number }> {
   const prompt = [
     `You are summarizing news items for a feed about: "${niche}".`,
-    'For each item, write ONE crisp sentence (max 28 words) capturing the substance — what happened, who, why it matters.',
+    'For each item, write ONE crisp sentence (max 28 words) using ONLY facts present in the provided title + snippet.',
+    'Do NOT invent details (launches, dates, numbers, quotes) that are not in the input.',
+    'If the snippet is empty or thin, just paraphrase the title — better short than fabricated.',
     'No marketing fluff. No "Click here". Plain prose.',
     'Return ONLY a JSON array of strings in input order. No prose outside the array.',
     '',
