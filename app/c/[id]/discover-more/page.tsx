@@ -2,7 +2,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
+import { ArrowLeft, Loader2, RotateCw } from 'lucide-react'
 import { useViewer } from '@/hooks/use-viewer'
+import { Badge, Button, Checkbox, MonoCaption } from '@/components/ui/primitives'
 import { hostname } from '@/lib/format'
 
 interface Suggestion {
@@ -26,7 +28,7 @@ export default function DiscoverMorePage() {
   const [error, setError] = useState<string | null>(null)
   const [suggestions, setSuggestions] = useState<Suggestion[]>([])
   const [existingHosts, setExistingHosts] = useState<Set<string>>(new Set())
-  const [picked, setPicked] = useState<Record<number, boolean>>({})
+  const [picked, setPicked] = useState<Set<number>>(new Set())
   const [saving, setSaving] = useState(false)
   const [saveResults, setSaveResults] = useState<Record<number, 'ok' | string>>({})
 
@@ -38,7 +40,6 @@ export default function DiscoverMorePage() {
       setError(null)
       try {
         const headers = { Authorization: `Bearer ${token}` }
-        // Pull current sources so we can filter duplicates from suggestions.
         const existing = await fetch(`/api/channels/${id}/sources`, { headers }).then((r) => r.json())
         const hosts = new Set<string>()
         for (const s of (existing.sources ?? []) as SourceRow[]) {
@@ -64,9 +65,9 @@ export default function DiscoverMorePage() {
           return true
         })
         setSuggestions(fresh)
-        const pre: Record<number, boolean> = {}
+        const pre = new Set<number>()
         fresh.forEach((s: Suggestion, i: number) => {
-          if (s.detection && !s.detection.needs_byok) pre[i] = true
+          if (s.detection && !s.detection.needs_byok) pre.add(i)
         })
         setPicked(pre)
       } catch (e) {
@@ -80,16 +81,24 @@ export default function DiscoverMorePage() {
     }
   }, [token, id])
 
+  function togglePick(i: number) {
+    setPicked((prev) => {
+      const next = new Set(prev)
+      if (next.has(i)) next.delete(i)
+      else next.add(i)
+      return next
+    })
+  }
+
   async function saveSources() {
     if (!token) return
     setSaving(true)
     setError(null)
     setSaveResults({})
-    const chosen = suggestions
-      .map((s, i) => ({ s, i }))
-      .filter(({ i }) => picked[i] && suggestions[i].detection)
+    const chosen = Array.from(picked).filter((i) => suggestions[i]?.detection)
     const results = await Promise.all(
-      chosen.map(async ({ s, i }) => {
+      chosen.map(async (i) => {
+        const s = suggestions[i]
         try {
           const r = await fetch(`/api/channels/${id}/sources`, {
             method: 'POST',
@@ -125,7 +134,6 @@ export default function DiscoverMorePage() {
     setSaveResults(next)
     setSaving(false)
     if (failCount === 0 && okCount > 0) {
-      // kick a refresh so the new sources contribute to the next run
       fetch(`/api/channels/${id}/refresh`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -133,78 +141,127 @@ export default function DiscoverMorePage() {
       }).catch(() => undefined)
       router.push(`/c/${id}?initialRefresh=1`)
     } else if (failCount > 0) {
-      setError(`${okCount}/${results.length} saved. ${failCount} failed — review badges below.`)
+      setError(`${okCount}/${results.length} saved. ${failCount} failed.`)
     }
   }
 
-  const pickedCount = useMemo(() => Object.values(picked).filter(Boolean).length, [picked])
+  const pickedCount = useMemo(() => picked.size, [picked])
 
-  if (!token) return <main className="container"><p className="muted">Loading…</p></main>
+  if (!token) {
+    return (
+      <main className="mx-auto max-w-prose px-6 pb-28 pt-12">
+        <MonoCaption>Loading…</MonoCaption>
+      </main>
+    )
+  }
 
   return (
-    <main className="container stack">
-      <div className="row" style={{ justifyContent: 'space-between' }}>
-        <h1 style={{ margin: 0 }}>Find more sources</h1>
-        <Link href={`/c/${id}`}><button className="secondary">Back</button></Link>
-      </div>
-      <p className="muted">
-        AI re-scans your niche and proposes new sources. Sources you already have are hidden.
+    <main className="mx-auto max-w-prose px-6 pb-28 pt-12">
+      <Link
+        href={`/c/${id}`}
+        className="mb-8 flex items-center gap-1.5 font-mono text-[11px] uppercase tracking-[0.12em] text-ink-4 transition-colors hover:text-ink"
+      >
+        <ArrowLeft className="h-3.5 w-3.5" strokeWidth={1.75} />
+        Back to channel
+      </Link>
+
+      <h1 className="font-serif text-5xl tracking-tight text-ink">Find more sources</h1>
+      <p className="mt-3 max-w-md text-[14px] leading-relaxed text-ink-3">
+        AI re-scans your niche and proposes new sources. Anything you already track is hidden.
       </p>
-      {error && <div className="card" style={{ borderColor: '#c33' }}>{error}</div>}
+
+      {error && (
+        <div className="mt-6 rounded-lg border border-ink bg-surface px-4 py-3 text-[13px] text-ink">{error}</div>
+      )}
 
       {loading && (
-        <div className="card">
-          <p><span className="spinner" />Asking AI to find more sources…</p>
-          <p className="muted">Usually 15–30s. Scanning RSS feeds, YouTube channels, X accounts, Instagram, subreddits.</p>
-        </div>
+        <>
+          <div className="mt-8 flex items-center gap-3 rounded-lg border border-line bg-surface px-5 py-4">
+            <Loader2 className="h-4 w-4 animate-spin text-ink" strokeWidth={1.75} />
+            <div>
+              <p className="text-[14px] font-medium text-ink">Re-scanning your niche…</p>
+              <p className="mt-0.5 text-[12.5px] text-ink-3">Checking RSS, Reddit, X, YouTube and the open web.</p>
+            </div>
+          </div>
+          <div className="mt-4 space-y-3">
+            {[0, 1].map((i) => (
+              <div key={i} className="rounded-lg border border-line bg-surface p-5">
+                <div className="h-3.5 w-1/2 animate-pulse rounded bg-surface-2" />
+                <div className="mt-2.5 h-2.5 w-3/4 animate-pulse rounded bg-surface-2" />
+              </div>
+            ))}
+          </div>
+        </>
       )}
 
       {!loading && suggestions.length === 0 && (
-        <div className="card">
-          <p>No new sources found. You may already have the best ones for this niche.</p>
+        <div className="mt-8 rounded-lg border border-dashed border-line-2 bg-surface px-8 py-16 text-center">
+          <p className="font-serif text-2xl tracking-tight text-ink">No new sources found</p>
+          <p className="mx-auto mt-2 max-w-sm text-[13.5px] leading-relaxed text-ink-3">
+            Everything relevant to this niche is already in the channel. Try again in a few days.
+          </p>
+          <div className="mt-6 flex items-center justify-center gap-3">
+            <Button variant="outline" onClick={() => router.refresh()}>
+              <RotateCw className="h-3.5 w-3.5" strokeWidth={1.75} />
+              Scan again
+            </Button>
+            <Link href={`/c/${id}`}>
+              <Button variant="primary">Back to channel</Button>
+            </Link>
+          </div>
         </div>
       )}
 
       {!loading && suggestions.length > 0 && (
-        <div className="stack">
-          <p className="muted">{suggestions.length} new candidates ({existingHosts.size} hidden as duplicates).</p>
-          {suggestions.map((s, i) => (
-            <div key={i} className="card">
-              <label className="row" style={{ alignItems: 'flex-start' }}>
-                <input
-                  type="checkbox"
-                  checked={!!picked[i]}
-                  disabled={!s.detection}
-                  onChange={(e) => setPicked({ ...picked, [i]: e.target.checked })}
-                  style={{ width: 'auto', marginTop: 4 }}
-                />
-                <div style={{ flex: 1, marginLeft: 8 }}>
-                  <div style={{ fontWeight: 600 }}>{s.suggestion.name}</div>
-                  <div className="muted" style={{ wordBreak: 'break-all' }}>{s.suggestion.url}</div>
-                  {s.suggestion.why && <div className="muted" style={{ marginTop: 4 }}>{s.suggestion.why}</div>}
-                  <div style={{ marginTop: 6 }}>
-                    {s.detection ? (
-                      <span className={`badge ${s.detection.needs_byok ? 'warn' : 'ok'}`}>
-                        {s.detection.type}{s.detection.tier ? ` · ${s.detection.tier}` : ''}
-                      </span>
-                    ) : (
-                      <span className="badge err">unreachable</span>
-                    )}
-                    {saveResults[i] === 'ok' && <span className="badge ok" style={{ marginLeft: 6 }}>✓ saved</span>}
-                    {saveResults[i] && saveResults[i] !== 'ok' && (
-                      <span className="badge err" style={{ marginLeft: 6 }}>✗ {saveResults[i]}</span>
-                    )}
-                  </div>
-                </div>
-              </label>
-            </div>
-          ))}
-          <div className="row">
-            <button onClick={saveSources} disabled={saving || pickedCount === 0}>
-              {saving ? 'Saving…' : `Add ${pickedCount} source${pickedCount === 1 ? '' : 's'}`}
-            </button>
+        <>
+          <div className="mt-6">
+            <MonoCaption>
+              {suggestions.length} new candidates · {existingHosts.size} already tracked
+            </MonoCaption>
           </div>
-        </div>
+          <div className="mt-6 space-y-3">
+            {suggestions.map((s, i) => {
+              const on = picked.has(i)
+              const saved = saveResults[i]
+              return (
+                <button
+                  key={i}
+                  type="button"
+                  onClick={() => s.detection && togglePick(i)}
+                  disabled={!s.detection}
+                  className={`flex w-full gap-4 rounded-lg border bg-surface p-5 text-left transition-colors disabled:opacity-50 ${
+                    on ? 'border-ink' : 'border-line hover:border-line-2'
+                  }`}
+                >
+                  <Checkbox checked={on} onClick={() => s.detection && togglePick(i)} />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-[15px] font-semibold tracking-tight text-ink">{s.suggestion.name}</span>
+                      {s.detection ? (
+                        <Badge>{s.detection.type}{s.detection.tier ? ` · ${s.detection.tier}` : ''}</Badge>
+                      ) : (
+                        <Badge muted>unreachable</Badge>
+                      )}
+                      {saved === 'ok' && <Badge tone="ok">✓ saved</Badge>}
+                      {saved && saved !== 'ok' && <Badge tone="err">{saved}</Badge>}
+                    </div>
+                    <div className="mt-1 font-mono text-[11.5px] text-ink-4 break-all">{s.suggestion.url}</div>
+                    {s.suggestion.why && <p className="mt-2 text-[13px] leading-relaxed text-ink-3">{s.suggestion.why}</p>}
+                  </div>
+                </button>
+              )
+            })}
+          </div>
+
+          <div className="mt-8 flex items-center gap-3 border-t border-line pt-7">
+            <Button variant="primary" className="h-11 px-6" disabled={pickedCount === 0 || saving} onClick={saveSources}>
+              {saving ? 'Saving…' : `Add ${pickedCount} ${pickedCount === 1 ? 'source' : 'sources'}`}
+            </Button>
+            <Link href={`/c/${id}`}>
+              <Button variant="ghost">Cancel</Button>
+            </Link>
+          </div>
+        </>
       )}
     </main>
   )

@@ -11,3 +11,7 @@ npm-debug.log*
 .DS_Store
 *.tsbuildinfo
 .claude/
+.playwright-mcp/
+niche-wire/
+niche-wire.zip
+*.png

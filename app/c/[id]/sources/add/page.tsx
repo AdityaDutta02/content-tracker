@@ -2,7 +2,9 @@
 import { useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
+import { ArrowLeft, Globe, Loader2 } from 'lucide-react'
 import { useViewer } from '@/hooks/use-viewer'
+import { Badge, Button, MonoCaption } from '@/components/ui/primitives'
 
 interface Detection {
   type: string
@@ -13,6 +15,9 @@ interface Detection {
   sample?: { title: string; url: string }
   needs_byok?: boolean
 }
+
+const inputCls =
+  'w-full h-11 rounded-md border border-line-2 bg-surface px-3.5 text-[14.5px] text-ink placeholder:text-ink-4 transition-colors focus:border-ink focus:outline-none focus:ring-1 focus:ring-ink'
 
 export default function AddSourcePage() {
   const { token } = useViewer()
@@ -75,43 +80,93 @@ export default function AddSourcePage() {
     }
   }
 
-  if (!token) return <main className="container"><p className="muted">Loading…</p></main>
+  if (!token) {
+    return (
+      <main className="mx-auto max-w-prose px-6 pb-28 pt-12">
+        <MonoCaption>Loading…</MonoCaption>
+      </main>
+    )
+  }
 
   return (
-    <main className="container stack">
-      <div className="row" style={{ justifyContent: 'space-between' }}>
-        <h1 style={{ margin: 0 }}>Add source</h1>
-        <Link href={`/c/${channelId}`}><button className="secondary">Back</button></Link>
-      </div>
-      {error && <div className="card" style={{ borderColor: '#c33' }}>{error}</div>}
+    <main className="mx-auto max-w-prose px-6 pb-28 pt-12">
+      <Link
+        href={`/c/${channelId}`}
+        className="mb-8 flex items-center gap-1.5 font-mono text-[11px] uppercase tracking-[0.12em] text-ink-4 transition-colors hover:text-ink"
+      >
+        <ArrowLeft className="h-3.5 w-3.5" strokeWidth={1.75} />
+        Back to channel
+      </Link>
 
-      <div className="card stack">
-        <label>
-          <div className="muted">URL or @handle</div>
-          <input value={input} onChange={(e) => setInput(e.target.value)} placeholder="https://arxiv.org/list/cs.AI/new or @paulg" />
-        </label>
-        <button onClick={probe} disabled={loading || !input}>{loading ? 'Probing…' : 'Detect'}</button>
-      </div>
+      <MonoCaption>Manual</MonoCaption>
+      <h1 className="mt-3 font-serif text-5xl leading-[0.95] tracking-tight text-ink">Add source</h1>
+      <p className="mt-3 max-w-md text-[14px] leading-relaxed text-ink-3">
+        Paste a URL or @handle. We&apos;ll probe it to pick the best fetch method.
+      </p>
 
-      {detection && (
-        <div className="card stack">
-          <div className="row">
-            <span className={`badge ${detection.needs_byok ? 'warn' : 'ok'}`}>{detection.type}</span>
-            {detection.tier && <span className="badge">{detection.tier}</span>}
-          </div>
-          {detection.sample && (
-            <div className="muted">Sample: <a href={detection.sample.url} target="_blank" rel="noreferrer">{detection.sample.title}</a></div>
-          )}
-          {detection.needs_byok && (
-            <div className="muted">Needs Firecrawl key on channel to scrape.</div>
-          )}
-          <label>
-            <div className="muted">Label (optional)</div>
-            <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="arxiv cs.AI" />
-          </label>
-          <button onClick={save} disabled={loading}>{loading ? 'Saving…' : 'Save source'}</button>
-        </div>
+      {error && (
+        <div className="mt-6 rounded-lg border border-ink bg-surface px-4 py-3 text-[13px] text-ink">{error}</div>
       )}
+
+      <div className="mt-8 space-y-5">
+        <label className="block">
+          <MonoCaption className="!text-ink-2">URL or @handle</MonoCaption>
+          <div className="mt-2 flex items-center gap-2">
+            <div className="relative flex-1">
+              <Globe className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-ink-4" strokeWidth={1.5} />
+              <input
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && probe()}
+                placeholder="https://arxiv.org/list/cs.AI/new  or  @paulg"
+                className={`${inputCls} pl-10`}
+              />
+            </div>
+            <Button variant="primary" onClick={probe} disabled={loading || !input}>
+              {loading && !detection ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+              {loading && !detection ? 'Probing' : 'Detect'}
+            </Button>
+          </div>
+        </label>
+
+        {detection && (
+          <div className="rounded-lg border border-line bg-surface p-5 space-y-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge tone={detection.needs_byok ? 'warn' : 'ok'}>{detection.type}</Badge>
+              {detection.tier && <Badge>{detection.tier}</Badge>}
+              {detection.needs_byok && <Badge muted>needs Firecrawl key</Badge>}
+            </div>
+
+            {detection.sample && (
+              <div className="text-[13px] text-ink-3">
+                Sample:{' '}
+                <a className="text-ink underline underline-offset-2" href={detection.sample.url} target="_blank" rel="noreferrer">
+                  {detection.sample.title}
+                </a>
+              </div>
+            )}
+
+            <label className="block">
+              <MonoCaption className="!text-ink-2">Label (optional)</MonoCaption>
+              <input
+                value={label}
+                onChange={(e) => setLabel(e.target.value)}
+                placeholder="arxiv cs.AI"
+                className={`${inputCls} mt-2`}
+              />
+            </label>
+
+            <div className="flex items-center gap-3 border-t border-line pt-4">
+              <Button variant="primary" onClick={save} disabled={loading}>
+                {loading ? 'Saving…' : 'Save source'}
+              </Button>
+              <Button variant="ghost" onClick={() => setDetection(null)} disabled={loading}>
+                Cancel
+              </Button>
+            </div>
+          </div>
+        )}
+      </div>
     </main>
   )
 }
