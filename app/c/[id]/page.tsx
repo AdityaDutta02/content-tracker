@@ -226,7 +226,10 @@ export default function ChannelPage() {
       {tab === 'sources' && (
         <div className="stack">
           <div className="row" style={{ justifyContent: 'space-between' }}>
-            <Link href={`/c/${id}/sources/add`}><button>+ Add source</button></Link>
+            <div className="row">
+              <Link href={`/c/${id}/sources/add`}><button>+ Add source</button></Link>
+              <Link href={`/c/${id}/discover-more`}><button className="secondary">✨ Find more</button></Link>
+            </div>
             {silentCount > 0 && (
               <button className="secondary older-toggle" onClick={() => setShowSilent((v) => !v)}>
                 {showSilent ? `− Hide ${silentCount} silent` : `+ Show ${silentCount} silent`}
