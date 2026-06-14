@@ -138,14 +138,24 @@ export default function ChannelPage() {
     }
   }
 
-  // Clean + filter items per run, drop runs with nothing to show.
+  // Client-side freshness mirror of the server pipeline. Even if a stored
+  // run holds older items (e.g. saved before the gate was deployed), we drop
+  // anything missing a date or older than 3 days at render time.
+  const MAX_AGE_MS = 3 * 24 * 60 * 60 * 1000
   const visibleRuns = useMemo(() => {
+    const now = Date.now()
     return runs
       .map((run) => ({
         ...run,
         items: (run.items_json ?? [])
           .map((it) => ({ ...it, title: cleanTitle(it.title), summary: cleanSummary(it.summary) }))
-          .filter((it) => it.title && it.url?.trim()),
+          .filter((it) => {
+            if (!it.title || !it.url?.trim()) return false
+            if (!it.published_at) return false
+            const t = new Date(it.published_at).getTime()
+            if (!Number.isFinite(t)) return false
+            return now - t <= MAX_AGE_MS && t - now < 24 * 60 * 60 * 1000
+          }),
       }))
       .filter((r) => r.items.length > 0)
   }, [runs])
