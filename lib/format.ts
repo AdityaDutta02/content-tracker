@@ -45,6 +45,14 @@ const DATE_PREFIX = /^\s*(?:\[)?(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|D
 const ISO_PREFIX = /^\s*\d{4}-\d{2}-\d{2}\s*[-:·•|]?\s*/
 const READ_TIME_SUFFIX = /\s*[·•|-]?\s*\d+\s*(?:min(?:ute)?s?)\s*read\s*\.?\s*$/i
 
+// RSS feeds occasionally emit doubled words at the join between two fields
+// ("Saved" headline + "Saved" link label → "SavedSaved"). Collapse them.
+function dedupeWords(t: string): string {
+  return t
+    .replace(/\b(\w{3,})\1\b/g, '$1')                  // "SavedSaved" → "Saved"
+    .replace(/\b(\w{3,})\s+\1\b/gi, '$1')              // "Saved Saved" → "Saved"
+}
+
 export function cleanTitle(raw: string): string {
   let t = (raw ?? '').trim()
   for (let i = 0; i < 3 && t; i++) {
@@ -52,6 +60,14 @@ export function cleanTitle(raw: string): string {
     t = t.replace(DATE_PREFIX, '').replace(ISO_PREFIX, '').trim()
     if (t === before) break
   }
+  t = dedupeWords(t).replace(/\s+/g, ' ').trim()
+  // Some feeds glue the article intro onto the title. If the result is huge
+  // and contains a sentence break, snap to the first sentence.
+  if (t.length > 130) {
+    const cut = t.search(/[.!?]\s+[A-Z]/)
+    if (cut > 30 && cut < 130) t = t.slice(0, cut + 1).trim()
+  }
+  if (t.length > 180) t = t.slice(0, 177).trim() + '…'
   return t
 }
 

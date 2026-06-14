@@ -105,7 +105,28 @@ export async function runChannelPipeline(
     return tb - ta
   })
 
-  const top = deduped.slice(0, TOP_N)
+  // Per-source diversity cap so one chatty feed cannot dominate the run.
+  // Cap = max(2, ceil(TOP_N / activeSourceCount)) but at least 2 to allow
+  // small libraries (few sources) to still fill the page.
+  const sourcesWithItems = new Set(deduped.map((d) => d.source_id)).size || 1
+  const perSourceCap = Math.max(2, Math.ceil(TOP_N / sourcesWithItems))
+  const perSourceCount = new Map<string, number>()
+  const top: Raw[] = []
+  for (const it of deduped) {
+    const n = perSourceCount.get(it.source_id) ?? 0
+    if (n >= perSourceCap) continue
+    perSourceCount.set(it.source_id, n + 1)
+    top.push(it)
+    if (top.length >= TOP_N) break
+  }
+  // Fallback: if cap was too tight and we have headroom, top up from leftovers.
+  if (top.length < TOP_N) {
+    const inTop = new Set(top.map((t) => t.url))
+    for (const it of deduped) {
+      if (top.length >= TOP_N) break
+      if (!inTop.has(it.url)) top.push(it)
+    }
+  }
 
   let credits_used = 0
   let summaries: string[] = top.map((t) => cleanShortSummary(t.summary))
