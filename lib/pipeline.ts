@@ -1,20 +1,19 @@
-// Pipeline orchestrator. Slim DB profile: ~5 gateway calls per run.
+// Pipeline orchestrator. Chronological-first with AI summary, no rerank.
+// Calls:
 //   1× list sources
-//   1× list recent runs (for cross-day dedupe)
-//   1× LLM ranking call (chat fast)
-//   1× insert runs row (with top-N items packed inline as JSONB)
+//   1× list recent runs (cross-day dedupe)
+//   1× LLM summary batch (chat fast)
+//   1× insert runs row (items packed as JSONB)
 //   1× update channels.last_run_date
-// No per-source updates and no per-item inserts — those previously caused viewer rate-limit blowups.
 import type { ChannelRow, SourceRow, FetchedItem } from './types'
 import { fetchSource } from './sources'
-import { rankItems, type Candidate } from './rank'
 import { canonicalizeUrl } from './canonical'
+import { callGateway } from './terminal-ai'
 import { dbList, dbInsert, dbUpdate } from './db'
 
-const TOP_N = 10
-const RECENT_RUNS_FOR_DEDUPE = 7  // look back N most recent runs to dedupe by canonical URL
+const TOP_N = 12
+const RECENT_RUNS_FOR_DEDUPE = 7
 
-// Per-source-type hard ceiling so one slow fetcher cannot hang the whole pipeline.
 const SOURCE_TIMEOUT_MS: Record<string, number> = {
   rss: 20_000,
   hn: 20_000,
@@ -51,6 +50,8 @@ interface RunRow {
   items_json: Array<{ canonical_url: string }>
 }
 
+type Raw = FetchedItem & { source_id: string }
+
 export async function runChannelPipeline(
   channel: ChannelRow,
   embedToken: string,
@@ -58,15 +59,13 @@ export async function runChannelPipeline(
 ): Promise<RunResult> {
   const errors: RunResult['errors'] = []
 
-  // CALL 1: list enabled sources
   const allSources = await dbList<SourceRow>('sources', { channel_id: channel.id }, embedToken)
   const sources = allSources.filter((s) => s.enabled !== false)
   if (sources.length === 0) {
     return { status: 'failed', item_count: 0, credits_used: 0, errors: [{ source_id: 'none', error: 'no enabled sources' }] }
   }
 
-  // Source fetches (HTTP, NOT gateway calls — no rate limit)
-  const raw: Array<FetchedItem & { source_id: string }> = []
+  const raw: Raw[] = []
   await Promise.all(
     sources.map(async (s) => {
       const ms = SOURCE_TIMEOUT_MS[s.type] ?? DEFAULT_SOURCE_TIMEOUT_MS
@@ -79,10 +78,8 @@ export async function runChannelPipeline(
     }),
   )
 
-  // canonicalize URLs in-memory
   for (const r of raw) r.url = canonicalizeUrl(r.url || '')
 
-  // CALL 2: list recent runs for dedupe (canonical URLs from past N runs)
   const recentRuns = await dbList<RunRow>('runs', { channel_id: channel.id }, embedToken)
   const seenUrls = new Set<string>()
   recentRuns
@@ -90,35 +87,54 @@ export async function runChannelPipeline(
     .slice(0, RECENT_RUNS_FOR_DEDUPE)
     .forEach((r) => (r.items_json ?? []).forEach((it) => seenUrls.add(it.canonical_url)))
 
-  // CALL 3: LLM ranking (only one call regardless of source count)
-  const { ranked, credits_used } = await rankItems({
-    channel: { niche: channel.niche, smart_mode: channel.smart_mode },
-    raw,
-    topN: TOP_N,
-    embedToken,
-    alreadySeen: seenUrls,
+  const fresh = raw.filter((r) => r.url && !seenUrls.has(r.url))
+
+  // In-run dedupe by canonical URL (keep first seen, which carries source_id).
+  const seenThisRun = new Set<string>()
+  const deduped: Raw[] = []
+  for (const it of fresh) {
+    if (seenThisRun.has(it.url)) continue
+    seenThisRun.add(it.url)
+    deduped.push(it)
+  }
+
+  // Chronological newest-first. Items with no published_at sink to bottom.
+  deduped.sort((a, b) => {
+    const ta = a.published_at ? new Date(a.published_at).getTime() : 0
+    const tb = b.published_at ? new Date(b.published_at).getTime() : 0
+    return tb - ta
   })
 
-  // Pack items inline for the runs row
-  const itemsJson = ranked.map((r: Candidate, i) => ({
-    source_id: r.source_id,
-    external_id: r.external_id,
-    canonical_url: canonicalizeUrl(r.url),
-    cluster_id: r.cluster_id,
-    title: r.title,
-    url: r.url,
-    summary: r.summary ?? null,
-    published_at: r.published_at ?? null,
-    engagement: r.engagement ?? {},
-    ai_relevance: r.ai_relevance,
-    final_score: r.final_score,
+  const top = deduped.slice(0, TOP_N)
+
+  let credits_used = 0
+  let summaries: string[] = top.map((t) => cleanShortSummary(t.summary))
+  if (top.length >= 3) {
+    try {
+      const r = await summarizeBatch(top, channel.niche, embedToken)
+      summaries = r.summaries
+      credits_used = r.credits
+    } catch (e) {
+      errors.push({ source_id: 'summarize', error: e instanceof Error ? e.message : String(e) })
+    }
+  }
+
+  const itemsJson = top.map((it, i) => ({
+    source_id: it.source_id,
+    external_id: it.external_id,
+    canonical_url: it.url,
+    title: it.title,
+    url: it.url,
+    summary: summaries[i] ?? cleanShortSummary(it.summary),
+    image_url: it.image_url ?? null,
+    published_at: it.published_at ?? null,
+    engagement: it.engagement ?? {},
     rank: i + 1,
   }))
 
   const today = new Date().toISOString().slice(0, 10)
-  const status: RunResult['status'] = errors.length === 0 ? 'ok' : ranked.length > 0 ? 'partial' : 'failed'
+  const status: RunResult['status'] = errors.length === 0 ? 'ok' : itemsJson.length > 0 ? 'partial' : 'failed'
 
-  // CALL 4: insert runs row with items inline (replaces N per-item inserts)
   const runRow = await dbInsert<{ id: string }>(
     'runs',
     {
@@ -136,7 +152,6 @@ export async function runChannelPipeline(
     return null
   })
 
-  // CALL 5: bump channel.last_run_date (non-fatal)
   if (channel.last_run_date !== today) {
     await dbUpdate<ChannelRow>('channels', channel.id, { last_run_date: today }, embedToken).catch(() => undefined)
   }
@@ -147,5 +162,56 @@ export async function runChannelPipeline(
     credits_used,
     errors,
     run_id: runRow?.id,
+  }
+}
+
+function cleanShortSummary(raw: string | undefined): string {
+  if (!raw) return ''
+  return raw
+    .replace(/\s*[·•|-]?\s*\d+\s*(?:min(?:ute)?s?)\s*read\s*\.?\s*$/i, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 260)
+}
+
+async function summarizeBatch(
+  items: Raw[],
+  niche: string,
+  embedToken: string,
+): Promise<{ summaries: string[]; credits: number }> {
+  const prompt = [
+    `You are summarizing news items for a feed about: "${niche}".`,
+    'For each item, write ONE crisp sentence (max 28 words) capturing the substance — what happened, who, why it matters.',
+    'No marketing fluff. No "Click here". Plain prose.',
+    'Return ONLY a JSON array of strings in input order. No prose outside the array.',
+    '',
+    'Items:',
+    ...items.map((it, i) => `${i}: ${it.title} — ${cleanShortSummary(it.summary).slice(0, 240)}`),
+  ].join('\n')
+
+  const result = await callGateway(
+    [{ role: 'user', content: prompt }],
+    embedToken,
+    { category: 'chat', tier: 'fast' },
+  )
+
+  return {
+    summaries: parseSummaries(result.content, items.length, items.map((it) => cleanShortSummary(it.summary))),
+    credits: result.credits_charged,
+  }
+}
+
+function parseSummaries(text: string, expected: number, fallback: string[]): string[] {
+  const m = text.match(/\[[\s\S]*\]/)
+  if (!m) return fallback
+  try {
+    const arr = JSON.parse(m[0]) as unknown[]
+    return Array.from({ length: expected }, (_, i) => {
+      const v = arr[i]
+      if (typeof v === 'string' && v.trim()) return v.trim().slice(0, 320)
+      return fallback[i] ?? ''
+    })
+  } catch {
+    return fallback
   }
 }

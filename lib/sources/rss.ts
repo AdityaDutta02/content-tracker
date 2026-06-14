@@ -1,11 +1,54 @@
 import Parser from 'rss-parser'
 import type { FetchedItem } from '../types'
 
-const parser = new Parser({ timeout: 15000, headers: { 'user-agent': 'ContentTrackerBot/1.0' } })
+interface RssExtras {
+  enclosure?: { url?: string; type?: string }
+  'media:content'?: { $?: { url?: string; medium?: string } } | Array<{ $?: { url?: string; medium?: string } }>
+  'media:thumbnail'?: { $?: { url?: string } } | Array<{ $?: { url?: string } }>
+  content?: string
+  'content:encoded'?: string
+}
+
+const parser: Parser<unknown, RssExtras> = new Parser({
+  timeout: 15000,
+  headers: { 'user-agent': 'ContentTrackerBot/1.0' },
+  customFields: {
+    item: ['media:content', 'media:thumbnail', 'content:encoded'],
+  },
+})
+
+function pickImage(it: Parser.Item & RssExtras): string | undefined {
+  const enc = it.enclosure
+  if (enc?.url && (!enc.type || enc.type.startsWith('image/'))) return enc.url
+
+  const mc = it['media:content']
+  if (mc) {
+    const arr = Array.isArray(mc) ? mc : [mc]
+    for (const m of arr) {
+      const url = m.$?.url
+      if (url && (m.$?.medium === 'image' || /\.(?:jpg|jpeg|png|webp|gif)/i.test(url))) return url
+    }
+  }
+
+  const mt = it['media:thumbnail']
+  if (mt) {
+    const arr = Array.isArray(mt) ? mt : [mt]
+    for (const m of arr) {
+      if (m.$?.url) return m.$.url
+    }
+  }
+
+  const html = it['content:encoded'] ?? it.content ?? ''
+  const match = html.match(/<img[^>]+src=["']([^"']+)["']/i)
+  if (match) return match[1]
+
+  return undefined
+}
 
 export async function fetchRss(url: string, since?: Date): Promise<FetchedItem[]> {
   const feed = await parser.parseURL(url)
-  const items = (feed.items ?? []).map((it) => {
+  const items = (feed.items ?? []).map((raw) => {
+    const it = raw as Parser.Item & RssExtras
     const published = it.isoDate ?? it.pubDate
     const publishedDate = published ? new Date(published) : undefined
     return {
@@ -13,6 +56,7 @@ export async function fetchRss(url: string, since?: Date): Promise<FetchedItem[]
       title: (it.title ?? '').trim(),
       url: it.link ?? '',
       summary: (it.contentSnippet ?? it.content ?? '').slice(0, 500),
+      image_url: pickImage(it),
       published_at: publishedDate?.toISOString(),
       raw: { feedTitle: feed.title },
     } satisfies FetchedItem

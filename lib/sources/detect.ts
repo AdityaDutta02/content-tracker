@@ -1,43 +1,63 @@
 import type { DetectionResult, SourceType } from '../types'
 import { autodiscoverRss } from './rss'
 import { cheerioExtract, jinaExtract } from './web'
+import { rsshubFor } from './rsshub'
 
 interface PlatformMatch {
   type: SourceType
   url?: string
   handle?: string
   scrape_config: Record<string, unknown>
-  tier: 'platform'
+  tier: 'platform' | 'rss'
+  display?: string
+}
+
+// Wraps a social handle into a normalized RSS source backed by RSSHub.
+// This collapses x/ig/yt/reddit into the same rss fetch path, so the
+// pipeline only has one fetcher to maintain.
+function asRss(platform: 'yt' | 'x' | 'ig' | 'reddit', handle: string): PlatformMatch | null {
+  const m = rsshubFor(platform, handle)
+  if (!m) return null
+  return {
+    type: 'rss',
+    url: m.rssUrl,
+    handle,
+    scrape_config: { feed_url: m.rssUrl, via: 'rsshub', original_platform: platform },
+    tier: 'rss',
+    display: m.display,
+  }
 }
 
 function matchKnownPlatform(input: string): PlatformMatch | null {
   const url = input.trim()
   const ytChan = url.match(/youtube\.com\/(?:@|c\/|channel\/|user\/)([^/?#]+)/i)
-  if (ytChan) return { type: 'yt', handle: ytChan[1], scrape_config: {}, tier: 'platform' }
+  if (ytChan) return asRss('yt', ytChan[1])
 
   const tw = url.match(/(?:twitter\.com|x\.com)\/([^/?#]+)/i)
-  if (tw && tw[1] !== 'search') return { type: 'x', handle: tw[1], scrape_config: {}, tier: 'platform' }
+  if (tw && tw[1] !== 'search') return asRss('x', tw[1])
 
   const ig = url.match(/instagram\.com\/([^/?#]+)/i)
-  if (ig) return { type: 'ig', handle: ig[1], scrape_config: {}, tier: 'platform' }
+  if (ig) return asRss('ig', ig[1])
 
+  // Facebook has no reliable public RSS path even via RSSHub. Surface but mark needs_byok.
   const fb = url.match(/facebook\.com\/([^/?#]+)/i)
   if (fb) return { type: 'fb', handle: fb[1], scrape_config: {}, tier: 'platform' }
 
+  // LinkedIn posts/profiles aren't reliably available via RSSHub either.
+  // Keep platform type so user can BYOK or skip.
   const liCo = url.match(/linkedin\.com\/(?:company|school|showcase)\/([^/?#]+)/i)
   if (liCo) return { type: 'linkedin', handle: liCo[1], scrape_config: { kind: 'company' }, tier: 'platform' }
   const liIn = url.match(/linkedin\.com\/in\/([^/?#]+)/i)
   if (liIn) return { type: 'linkedin', handle: liIn[1], scrape_config: { kind: 'profile' }, tier: 'platform' }
   const liPosts = url.match(/linkedin\.com\/(?:in|company|school|showcase)\/([^/?#]+)\/(?:recent-activity|posts)/i)
   if (liPosts) return { type: 'linkedin', handle: liPosts[1], scrape_config: { kind: 'profile' }, tier: 'platform' }
-  // bare linkedin.com/<slug> (not feed/login/jobs/etc — those are non-handle paths)
   const liBare = url.match(/^(?:https?:\/\/)?(?:www\.)?linkedin\.com\/([^/?#]+)\/?$/i)
   if (liBare && !/^(feed|login|signup|jobs|learning|notifications|messaging|mynetwork|search|help)$/i.test(liBare[1])) {
     return { type: 'linkedin', handle: liBare[1], scrape_config: { kind: 'profile' }, tier: 'platform' }
   }
 
   const reddit = url.match(/reddit\.com\/r\/([^/?#]+)/i)
-  if (reddit) return { type: 'reddit', handle: reddit[1], scrape_config: { sort: 'top' }, tier: 'platform' }
+  if (reddit) return asRss('reddit', reddit[1])
 
   if (/news\.ycombinator\.com/i.test(url)) {
     const q = url.match(/[?&]q=([^&]+)/)
@@ -55,7 +75,8 @@ export async function detectSource(input: string): Promise<DetectionResult> {
   if (known) return known
 
   if (/^@[A-Za-z0-9_]+$/.test(input)) {
-    return { type: 'x', handle: input.slice(1), scrape_config: {}, tier: 'platform' }
+    const m = rsshubFor('x', input.slice(1))
+    if (m) return { type: 'rss', url: m.rssUrl, handle: input.slice(1), scrape_config: { feed_url: m.rssUrl, via: 'rsshub', original_platform: 'x' }, tier: 'rss' }
   }
 
   let url = input

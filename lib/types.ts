@@ -5,6 +5,7 @@ export interface FetchedItem {
   title: string
   url: string
   summary?: string
+  image_url?: string
   published_at?: string
   engagement?: { likes?: number; comments?: number; reposts?: number; upvotes?: number; views?: number }
   raw?: Record<string, unknown>

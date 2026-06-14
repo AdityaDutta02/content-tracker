@@ -60,20 +60,29 @@ export function cleanSummary(raw: string | null): string {
   return raw.replace(READ_TIME_SUFFIX, '').trim()
 }
 
-// Best-effort "open in new tab" from inside an embedded iframe.
-// Never navigates the current frame — losing the user's place in the app
-// is worse than the link not working. Tries a real popup first; if the
-// host sandbox blocks it, asks the parent shell to open it via postMessage.
-export function openExternal(url: string): void {
+// Iframe sandboxes regularly block window.open and parent.postMessage.
+// Most reliable cross-sandbox "share this URL" is clipboard write — works
+// without any host shell cooperation. Caller renders a toast on success.
+export async function copyUrl(url: string): Promise<boolean> {
   try {
-    const w = window.open(url, '_blank', 'noopener,noreferrer')
-    if (w) return
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(url)
+      return true
+    }
   } catch {
-    /* popup blocked — fall through */
+    /* fall through to legacy path */
   }
   try {
-    window.parent?.postMessage({ type: 'TERMINAL_AI_OPEN_URL', url, target: '_blank' }, '*')
+    const ta = document.createElement('textarea')
+    ta.value = url
+    ta.style.position = 'fixed'
+    ta.style.opacity = '0'
+    document.body.appendChild(ta)
+    ta.select()
+    const ok = document.execCommand('copy')
+    document.body.removeChild(ta)
+    return ok
   } catch {
-    /* cross-origin parent — nothing else to do */
+    return false
   }
 }
