@@ -12,9 +12,11 @@ import { callGateway } from './terminal-ai'
 import { dbList, dbInsert, dbUpdate } from './db'
 
 const TOP_N = 12
+const MIN_TOP = 5
 const RECENT_RUNS_FOR_DEDUPE = 7
-const MAX_AGE_DAYS = 3
-const MAX_AGE_MS = MAX_AGE_DAYS * 24 * 60 * 60 * 1000
+const PRIMARY_AGE_MS = 7 * 24 * 60 * 60 * 1000
+const BACKFILL_AGE_MS = 30 * 24 * 60 * 60 * 1000
+const FUTURE_SLACK_MS = 24 * 60 * 60 * 1000
 
 const SOURCE_TIMEOUT_MS: Record<string, number> = {
   rss: 20_000,
@@ -89,35 +91,49 @@ export async function runChannelPipeline(
     .slice(0, RECENT_RUNS_FOR_DEDUPE)
     .forEach((r) => (r.items_json ?? []).forEach((it) => seenUrls.add(it.canonical_url)))
 
-  // Strict freshness gate. Drop anything without a parseable published date
-  // OR older than MAX_AGE_DAYS. A feed that never sets pubDate (lots of bare
-  // sitemaps and AI-extracted web pages) gets nothing in the run — better an
-  // empty card than 3-year-old marketing copy showing as "JUST NOW".
+  // Tiered freshness gate. Never strand the user on an empty feed.
+  //   undated items → treat as fetched-now (low confidence, ranked last).
+  //   future-dated > 24h → dropped (clock junk).
+  //   tier 1: within 7d → primary set.
+  //   tier 2: within 30d → backfill if tier 1 < MIN_TOP.
+  //   tier 3: any age → backfill if still < MIN_TOP.
+  // Dedupe + URL validity still enforced at all tiers.
   const now = Date.now()
-  const fresh = raw.filter((r) => {
-    if (!r.url || seenUrls.has(r.url)) return false
-    if (!r.published_at) return false
-    const t = new Date(r.published_at).getTime()
-    if (!Number.isFinite(t)) return false
-    if (now - t > MAX_AGE_MS) return false
-    if (t - now > 24 * 60 * 60 * 1000) return false  // future-dated junk
-    return true
-  })
+  type Aged = Raw & { _t: number; _undated: boolean }
+  const aged: Aged[] = []
+  for (const r of raw) {
+    if (!r.url || seenUrls.has(r.url)) continue
+    let t = r.published_at ? new Date(r.published_at).getTime() : NaN
+    const undated = !Number.isFinite(t)
+    if (undated) t = now
+    if (t - now > FUTURE_SLACK_MS) continue
+    aged.push({ ...r, _t: t, _undated: undated })
+  }
+
+  const tier1 = aged.filter((r) => !r._undated && now - r._t <= PRIMARY_AGE_MS)
+  let fresh: Aged[] = tier1
+  if (fresh.length < MIN_TOP) {
+    const tier2 = aged.filter((r) => !r._undated && now - r._t > PRIMARY_AGE_MS && now - r._t <= BACKFILL_AGE_MS)
+    fresh = [...fresh, ...tier2]
+  }
+  if (fresh.length < MIN_TOP) {
+    const tier3 = aged.filter((r) => r._undated || now - r._t > BACKFILL_AGE_MS)
+    fresh = [...fresh, ...tier3]
+  }
 
   // In-run dedupe by canonical URL (keep first seen, which carries source_id).
   const seenThisRun = new Set<string>()
-  const deduped: Raw[] = []
+  const deduped: Aged[] = []
   for (const it of fresh) {
     if (seenThisRun.has(it.url)) continue
     seenThisRun.add(it.url)
     deduped.push(it)
   }
 
-  // Chronological newest-first.
+  // Chronological newest-first; undated items sink to bottom.
   deduped.sort((a, b) => {
-    const ta = new Date(a.published_at!).getTime()
-    const tb = new Date(b.published_at!).getTime()
-    return tb - ta
+    if (a._undated !== b._undated) return a._undated ? 1 : -1
+    return b._t - a._t
   })
 
   // Per-source diversity cap so one chatty feed cannot dominate the run.

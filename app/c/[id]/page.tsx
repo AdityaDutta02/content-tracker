@@ -76,6 +76,7 @@ export default function ChannelPage() {
   const [toast, setToast] = useState<{ msg: string; actionLabel?: string; onAction?: () => void } | null>(null)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const autoRefreshedRef = useRef(false)
 
   useEffect(() => {
     if (!token || !id) return
@@ -162,7 +163,9 @@ export default function ChannelPage() {
     }).catch(() => undefined)
   }
 
-  const MAX_AGE_MS = 3 * 24 * 60 * 60 * 1000
+  // No client-side age filter: pipeline already gates. Drop only obvious junk
+  // (missing title/url, future-dated > 24h). Undated items kept and rendered
+  // with "—" timestamp so the feed is never empty.
   const visibleRuns = useMemo(() => {
     const now = Date.now()
     return runs
@@ -172,10 +175,11 @@ export default function ChannelPage() {
           .map((it) => ({ ...it, title: cleanTitle(it.title), summary: cleanSummary(it.summary) }))
           .filter((it) => {
             if (!it.title || !it.url?.trim()) return false
-            if (!it.published_at) return false
-            const t = new Date(it.published_at).getTime()
-            if (!Number.isFinite(t)) return false
-            return now - t <= MAX_AGE_MS && t - now < 24 * 60 * 60 * 1000
+            if (it.published_at) {
+              const t = new Date(it.published_at).getTime()
+              if (Number.isFinite(t) && t - now > 24 * 60 * 60 * 1000) return false
+            }
+            return true
           }),
       }))
       .filter((r) => r.items.length > 0)
@@ -194,6 +198,19 @@ export default function ChannelPage() {
   }, [sources])
 
   const allItems = useMemo(() => visibleRuns.flatMap((r) => r.items), [visibleRuns])
+
+  // Auto-refresh once when channel has sources but no usable items yet.
+  // Covers: brand-new channel without a cron run, or a run that returned 0 items.
+  useEffect(() => {
+    if (autoRefreshedRef.current) return
+    if (!token || !channel || refreshing || buildingFirstFeed) return
+    if (sources.length === 0) return
+    if (allItems.length > 0) return
+    autoRefreshedRef.current = true
+    setBuildingFirstFeed(true)
+    refresh().finally(() => setBuildingFirstFeed(false))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, channel, sources.length, allItems.length, refreshing, buildingFirstFeed])
 
   const silentCount = sources.filter((s) => !activeSourceIds.has(s.id)).length
   const errorCount = sources.filter((s) => s.last_fetch_error).length
@@ -311,9 +328,9 @@ export default function ChannelPage() {
             </div>
           ) : allItems.length === 0 ? (
             <div className="mt-7 rounded-lg border border-dashed border-line-2 bg-surface px-8 py-14 text-center">
-              <p className="font-serif text-2xl tracking-tight text-ink">Nothing fresh in the last 3 days</p>
+              <p className="font-serif text-2xl tracking-tight text-ink">Feed is quiet right now</p>
               <p className="mx-auto mt-2 max-w-sm text-[13.5px] leading-relaxed text-ink-3">
-                Scan now, add more sources, or wait for tomorrow&rsquo;s 10:00 cron.
+                Sources returned nothing usable. Scan again, add more sources, or wait for tomorrow&rsquo;s 10:00 cron.
               </p>
               <div className="mt-6 flex items-center justify-center gap-3">
                 <Button variant="primary" onClick={refresh} disabled={refreshing}>
