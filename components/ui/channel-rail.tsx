@@ -53,7 +53,7 @@ export function ChannelRail() {
   if (!onChannel) return null
 
   return (
-    <aside className="sticky top-14 hidden h-[calc(100vh-3.5rem)] w-60 shrink-0 border-r border-line md:block">
+    <aside className="sticky top-0 hidden h-screen w-60 shrink-0 border-r border-line md:block">
       <div className="flex h-full flex-col px-3 py-5">
         <div className="flex items-center justify-between px-2">
           <Link
