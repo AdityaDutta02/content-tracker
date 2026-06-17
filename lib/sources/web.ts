@@ -113,7 +113,13 @@ function parseMarkdownLinks(md: string, base: string): FetchedItem[] {
   const out: FetchedItem[] = []
   const seen = new Set<string>()
   for (const m of md.matchAll(re)) {
-    const title = m[1].trim()
+    // Skip markdown IMAGE syntax ![alt](url) — its alt-text is not a headline.
+    // (This is what produced junk titles like "![Image ]" / "Image 1".)
+    if (m.index !== undefined && m.index > 0 && md[m.index - 1] === '!') continue
+
+    const title = sanitizeTitle(m[1])
+    if (title.length < 8) continue
+
     let urlOut: string
     try {
       urlOut = new URL(m[2], base).href
@@ -125,4 +131,15 @@ function parseMarkdownLinks(md: string, base: string): FetchedItem[] {
     out.push({ external_id: urlOut, title, url: urlOut })
   }
   return out
+}
+
+// Strip leftover markdown tokens (nested images/links, stray brackets/bangs)
+// that leak into titles from scraped markdown.
+export function sanitizeTitle(raw: string): string {
+  return raw
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, '') // nested ![alt](url)
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1') // nested [text](url) -> text
+    .replace(/[![\]]/g, '') // stray ! [ ]
+    .replace(/\s+/g, ' ')
+    .trim()
 }
