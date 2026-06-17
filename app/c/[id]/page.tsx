@@ -163,26 +163,50 @@ export default function ChannelPage() {
     }).catch(() => undefined)
   }
 
-  // No client-side age filter: pipeline already gates. Drop only obvious junk
-  // (missing title/url, future-dated > 24h). Undated items kept and rendered
-  // with "—" timestamp so the feed is never empty.
-  const visibleRuns = useMemo(() => {
+  // Feed cap: newest FEED_CAP items across runs. Latest run is guaranteed
+  // visible; older runs backfill remaining slots. Never grouped per run.
+  // No client-side age filter beyond junk (missing title/url, future > 24h);
+  // pipeline already gates freshness. Undated items kept, sorted last.
+  const FEED_CAP = 10
+  const visibleItems = useMemo(() => {
     const now = Date.now()
-    return runs
-      .map((run) => ({
-        ...run,
-        items: (run.items_json ?? [])
-          .map((it) => ({ ...it, title: cleanTitle(it.title), summary: cleanSummary(it.summary) }))
-          .filter((it) => {
-            if (!it.title || !it.url?.trim()) return false
-            if (it.published_at) {
-              const t = new Date(it.published_at).getTime()
-              if (Number.isFinite(t) && t - now > 24 * 60 * 60 * 1000) return false
-            }
-            return true
-          }),
-      }))
-      .filter((r) => r.items.length > 0)
+    const clean = (its: Item[]) =>
+      (its ?? [])
+        .map((it) => ({ ...it, title: cleanTitle(it.title), summary: cleanSummary(it.summary) }))
+        .filter((it) => {
+          if (!it.title || !it.url?.trim()) return false
+          if (it.published_at) {
+            const t = new Date(it.published_at).getTime()
+            if (Number.isFinite(t) && t - now > 24 * 60 * 60 * 1000) return false
+          }
+          return true
+        })
+    const ordered = [...runs].sort((a, b) => (a.run_at < b.run_at ? 1 : -1))
+    const primary = ordered[0] ? clean(ordered[0].items_json) : []
+    const backfill = ordered.slice(1).flatMap((r) => clean(r.items_json))
+    // Dedupe across the union by canonical URL; primary scanned first so the
+    // first-seen copy (newest run) wins and newness flags stay correct.
+    const seen = new Set<string>()
+    const dedupe = (arr: Item[]) =>
+      arr.filter((it) => {
+        const k = it.canonical_url || it.url
+        if (seen.has(k)) return false
+        seen.add(k)
+        return true
+      })
+    const p = dedupe(primary)
+    const b = dedupe(backfill)
+    // Select primary-first, fill remainder from backfill, cap at FEED_CAP.
+    const picked = [...p, ...b].slice(0, FEED_CAP)
+    // Final chronological sort (newest first, undated last).
+    return picked.sort((x, y) => {
+      const tx = x.published_at ? new Date(x.published_at).getTime() : NaN
+      const ty = y.published_at ? new Date(y.published_at).getTime() : NaN
+      const ux = !Number.isFinite(tx)
+      const uy = !Number.isFinite(ty)
+      if (ux !== uy) return ux ? 1 : -1
+      return (ux ? 0 : ty) - (uy ? 0 : tx)
+    })
   }, [runs])
 
   const activeSourceIds = useMemo(() => {
@@ -197,7 +221,7 @@ export default function ChannelPage() {
     return m
   }, [sources])
 
-  const allItems = useMemo(() => visibleRuns.flatMap((r) => r.items), [visibleRuns])
+  const allItems = visibleItems
 
   // Auto-refresh once when channel has sources but no usable items yet.
   // Covers: brand-new channel without a cron run, or a run that returned 0 items.
@@ -251,7 +275,7 @@ export default function ChannelPage() {
     </div>
   )
 
-  const latestRunAt = visibleRuns[0]?.run_at ?? runs[0]?.run_at ?? null
+  const latestRunAt = [...runs].sort((a, b) => (a.run_at < b.run_at ? 1 : -1))[0]?.run_at ?? null
   const lastScan = latestRunAt ? relativeTime(latestRunAt) : 'never'
 
   return (

@@ -10,9 +10,18 @@ import { fetchSource } from './sources'
 import { canonicalizeUrl } from './canonical'
 import { callGateway } from './terminal-ai'
 import { dbList, dbInsert, dbUpdate } from './db'
+import { dateInTz } from './time'
+import { looksLikeArticle } from './sources/quality'
 
-const TOP_N = 12
+const TOP_N = 10
+// A web source whose entire fetched sample is non-article for this many
+// consecutive runs is auto-silenced (issue #22) so the Sources tab flags it.
+const SILENCE_AFTER_EMPTY_RUNS = 3
 const MIN_TOP = 5
+const SOCIAL_QUOTA_TARGET = 3
+const SOCIAL_QUOTA_MIN = 2
+const ARTICLE_QUOTA = TOP_N - SOCIAL_QUOTA_TARGET // = 7
+const SOCIAL_TYPES = new Set<string>(['x', 'ig', 'yt'])
 const RECENT_RUNS_FOR_DEDUPE = 7
 const PRIMARY_AGE_MS = 7 * 24 * 60 * 60 * 1000
 const BACKFILL_AGE_MS = 30 * 24 * 60 * 60 * 1000
@@ -74,7 +83,7 @@ export async function runChannelPipeline(
     sources.map(async (s) => {
       const ms = SOURCE_TIMEOUT_MS[s.type] ?? DEFAULT_SOURCE_TIMEOUT_MS
       try {
-        const items = await withTimeout(fetchSource(s, channel), ms, `source ${s.type}:${s.id}`)
+        const items = await withTimeout(fetchSource(s, channel, embedToken), ms, `source ${s.type}:${s.id}`)
         for (const it of items) raw.push({ ...it, source_id: s.id })
       } catch (e) {
         errors.push({ source_id: s.id, error: e instanceof Error ? e.message : String(e) })
@@ -83,6 +92,22 @@ export async function runChannelPipeline(
   )
 
   for (const r of raw) r.url = canonicalizeUrl(r.url || '')
+
+  // Runtime article backstop (issue #22). A web source that passed detection can
+  // drift (redesign turns articles into nav). Drop non-article items from web
+  // sources before they reach the feed. Structured sources (rss/hn/reddit/arxiv)
+  // and social cards are trusted as-is.
+  const srcType = new Map(sources.map((s) => [s.id, s.type]))
+  const srcUrl = new Map(sources.map((s) => [s.id, s.url ?? undefined]))
+  const isWeb = (sourceId: string) => srcType.get(sourceId) === 'web'
+  const articleClean = raw.filter(
+    (r) => !isWeb(r.source_id) || looksLikeArticle(r, srcUrl.get(r.source_id)),
+  )
+
+  // Auto-silence drifted web sources: if a web source returned items but ZERO
+  // survived the article filter, count it as an empty run; after N consecutive
+  // empties, disable it and surface the reason in the Sources tab. Fire-and-forget.
+  await reconcileWebSourceHealth(sources, raw, articleClean, srcType, embedToken)
 
   const recentRuns = await dbList<RunRow>('runs', { channel_id: channel.id }, embedToken)
   const seenUrls = new Set<string>()
@@ -101,7 +126,7 @@ export async function runChannelPipeline(
   const now = Date.now()
   type Aged = Raw & { _t: number; _undated: boolean }
   const aged: Aged[] = []
-  for (const r of raw) {
+  for (const r of articleClean) {
     if (!r.url || seenUrls.has(r.url)) continue
     let t = r.published_at ? new Date(r.published_at).getTime() : NaN
     const undated = !Number.isFinite(t)
@@ -136,28 +161,62 @@ export async function runChannelPipeline(
     return b._t - a._t
   })
 
-  // Per-source diversity cap so one chatty feed cannot dominate the run.
-  // Cap = max(2, ceil(TOP_N / activeSourceCount)) but at least 2 to allow
-  // small libraries (few sources) to still fill the page.
-  const sourcesWithItems = new Set(deduped.map((d) => d.source_id)).size || 1
-  const perSourceCap = Math.max(2, Math.ceil(TOP_N / sourcesWithItems))
-  const perSourceCount = new Map<string, number>()
-  const top: Raw[] = []
-  for (const it of deduped) {
-    const n = perSourceCount.get(it.source_id) ?? 0
-    if (n >= perSourceCap) continue
-    perSourceCount.set(it.source_id, n + 1)
-    top.push(it)
-    if (top.length >= TOP_N) break
+  // Social quota. Partition into social (x/ig/yt) vs article (everything else)
+  // so chatty article feeds cannot crowd social cards out of the top slots.
+  // Target: 7 articles + 3 social, but each bucket backfills the other so the
+  // feed still fills to TOP_N when one bucket is thin.
+  const isSocial = (it: Aged) => SOCIAL_TYPES.has(srcType.get(it.source_id) ?? '')
+  const socialItems = deduped.filter(isSocial)
+  const articleItems = deduped.filter((it) => !isSocial(it))
+
+  // Per-source diversity cap applied WITHIN each bucket, not across.
+  function capPerSource(items: Aged[], quota: number): Aged[] {
+    const srcCount = new Set(items.map((d) => d.source_id)).size || 1
+    const cap = Math.max(2, Math.ceil(quota / srcCount))
+    const count = new Map<string, number>()
+    const out: Aged[] = []
+    for (const it of items) {
+      const n = count.get(it.source_id) ?? 0
+      if (n >= cap) continue
+      count.set(it.source_id, n + 1)
+      out.push(it)
+    }
+    return out
   }
-  // Fallback: if cap was too tight and we have headroom, top up from leftovers.
-  if (top.length < TOP_N) {
-    const inTop = new Set(top.map((t) => t.url))
-    for (const it of deduped) {
-      if (top.length >= TOP_N) break
-      if (!inTop.has(it.url)) top.push(it)
+  const cappedArticle = capPerSource(articleItems, ARTICLE_QUOTA)
+  const cappedSocial = capPerSource(socialItems, SOCIAL_QUOTA_TARGET)
+
+  // Buckets are disjoint, so primary picks never collide. Reserve up to TARGET
+  // social slots (≥ MIN whenever that many social items exist) + ARTICLE_QUOTA
+  // article slots, then backfill any shortfall from the other bucket, then from
+  // uncapped leftovers so a tight per-source cap never leaves empty slots.
+  const picked: Aged[] = [
+    ...cappedSocial.slice(0, SOCIAL_QUOTA_TARGET),
+    ...cappedArticle.slice(0, ARTICLE_QUOTA),
+  ]
+  const have = new Set(picked.map((p) => p.url))
+  const backfill = (pool: Aged[]) => {
+    for (const it of pool) {
+      if (picked.length >= TOP_N) break
+      if (have.has(it.url)) continue
+      have.add(it.url)
+      picked.push(it)
     }
   }
+  backfill(cappedArticle)
+  backfill(cappedSocial)
+  backfill(deduped)
+  if (socialItems.length >= SOCIAL_QUOTA_MIN && picked.filter(isSocial).length < SOCIAL_QUOTA_MIN) {
+    // Defensive: should not happen given the reserve above, but guarantees the floor.
+    backfill(socialItems)
+  }
+
+  // Final chronological sort so the feed reads newest-first, not bucket-grouped.
+  picked.sort((a, b) => {
+    if (a._undated !== b._undated) return a._undated ? 1 : -1
+    return b._t - a._t
+  })
+  const top: Raw[] = picked.slice(0, TOP_N)
 
   let credits_used = 0
   let summaries: string[] = top.map((t) => cleanShortSummary(t.summary))
@@ -184,7 +243,10 @@ export async function runChannelPipeline(
     rank: i + 1,
   }))
 
-  const today = new Date().toISOString().slice(0, 10)
+  // Write the run-date in the CHANNEL's timezone so the cron's "already ran
+  // today" check (also tz-based) agrees — UTC here caused double/skip near
+  // midnight (issue #20).
+  const today = dateInTz(new Date(), channel.timezone)
   const status: RunResult['status'] = errors.length === 0 ? 'ok' : itemsJson.length > 0 ? 'partial' : 'failed'
 
   const runRow = await dbInsert<{ id: string }>(
@@ -215,6 +277,54 @@ export async function runChannelPipeline(
     errors,
     run_id: runRow?.id,
   }
+}
+
+// Track per-web-source "empty run" streaks (issue #22). A run where the source
+// returned items but none survived the article filter increments the streak;
+// after SILENCE_AFTER_EMPTY_RUNS the source is disabled with a visible reason.
+// A run that produces real items resets the streak. Fetch failures (0 fetched)
+// are ignored here — they're transient, not drift. All writes are best-effort.
+async function reconcileWebSourceHealth(
+  sources: SourceRow[],
+  raw: Raw[],
+  clean: Raw[],
+  srcType: Map<string, string>,
+  embedToken: string,
+): Promise<void> {
+  const fetchedCount = new Map<string, number>()
+  const goodCount = new Map<string, number>()
+  for (const r of raw) fetchedCount.set(r.source_id, (fetchedCount.get(r.source_id) ?? 0) + 1)
+  for (const r of clean) goodCount.set(r.source_id, (goodCount.get(r.source_id) ?? 0) + 1)
+
+  const updates: Array<Promise<unknown>> = []
+  for (const s of sources) {
+    if (srcType.get(s.id) !== 'web') continue
+    const fetched = fetchedCount.get(s.id) ?? 0
+    if (fetched === 0) continue // fetch failed/empty — transient, don't penalize
+    const good = goodCount.get(s.id) ?? 0
+    const cfg = s.scrape_config ?? {}
+    const prevEmpty = Number((cfg._empty_runs as number | undefined) ?? 0)
+
+    if (good === 0) {
+      const empty = prevEmpty + 1
+      const patch: Partial<SourceRow> = { scrape_config: { ...cfg, _empty_runs: empty } }
+      if (empty >= SILENCE_AFTER_EMPTY_RUNS) {
+        patch.enabled = false
+        patch.last_fetch_error = `Silenced: no article-like items in ${empty} runs (source may have changed)`
+      }
+      updates.push(dbUpdate<SourceRow>('sources', s.id, patch, embedToken).catch(() => undefined))
+    } else if (prevEmpty !== 0) {
+      updates.push(
+        dbUpdate<SourceRow>(
+          'sources',
+          s.id,
+          { scrape_config: { ...cfg, _empty_runs: 0 }, last_fetch_error: null },
+          embedToken,
+        ).catch(() => undefined),
+      )
+    }
+  }
+  await Promise.all(updates)
 }
 
 function cleanShortSummary(raw: string | undefined): string {

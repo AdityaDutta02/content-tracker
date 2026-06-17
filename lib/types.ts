@@ -1,5 +1,16 @@
 export type SourceType = 'rss' | 'hn' | 'reddit' | 'arxiv' | 'yt' | 'x' | 'ig' | 'fb' | 'linkedin' | 'web'
 
+// Per-source social fetch tier (see lib/sources/social-fetch.ts).
+export type FetchTier = 'native' | 'rsshub' | 'apify'
+
+// Typed shape of scrape_config for social sources. scrape_config stays a loose
+// Record on SourceRow; this documents the keys the social path reads/writes.
+export interface SocialScrapeConfig {
+  fetch_tier?: FetchTier
+  fetch_tiers?: FetchTier[]
+  channel_id?: string
+}
+
 export interface FetchedItem {
   external_id: string
   title: string
@@ -48,4 +59,10 @@ export interface DetectionResult {
   tier?: 'rss' | 'cheerio' | 'jina' | 'firecrawl_required' | 'platform'
   sample?: { title: string; url: string }
   needs_byok?: boolean
+  // Social tier metadata (see lib/sources/detect.ts probeSocial).
+  available_tiers?: FetchTier[]
+  recommended_tier?: FetchTier
+  cost?: 'free' | 'byok'
+  // 'low' = passed detection but the sample scored weak (surfaced, not auto-selected).
+  health?: 'ok' | 'low' | 'untested' | 'down'
 }

@@ -54,8 +54,24 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     )
 
     const suggestions = parseSuggestions(result.content)
+    let credits_used = result.credits_charged
 
-    // probe each in parallel — keep ones that detect cleanly, drop ones needing BYOK if no key
+    // Hard floor: guarantee ≥3 social handles. If the first pass came back
+    // article-heavy, re-prompt once for more social and append.
+    const SOCIAL_FLOOR = 3
+    if (countSocial(suggestions) < SOCIAL_FLOOR) {
+      const have = suggestions.map((s) => s.url)
+      const more = await callGateway(
+        [{ role: 'user', content: socialTopUpPrompt(channel, have) }],
+        body.embedToken,
+        { category: 'web_search', tier: 'good' },
+      )
+      credits_used += more.credits_charged
+      const extra = parseSuggestions(more.content).filter((s) => !have.includes(s.url))
+      suggestions.push(...extra)
+    }
+
+    // probe each in parallel — never drop, badges carry the FREE/BYOK/DOWN signal
     const probed = await Promise.all(
       suggestions.map(async (s) => {
         try {
@@ -69,11 +85,41 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
     return NextResponse.json({
       suggestions: probed,
-      credits_used: result.credits_charged,
+      credits_used,
     })
   } catch (e) {
     return errorResponse(e)
   }
+}
+
+const SOCIAL_HINTS = new Set(['x', 'ig', 'yt'])
+function isSocialSuggestion(s: Suggestion): boolean {
+  if (s.type_hint && SOCIAL_HINTS.has(s.type_hint)) return true
+  return /(?:twitter\.com|x\.com|instagram\.com|youtube\.com)/i.test(s.url)
+}
+
+function countSocial(list: Suggestion[]): number {
+  return list.filter(isSocialSuggestion).length
+}
+
+function socialTopUpPrompt(channel: ChannelRow, alreadyHave: string[]): string {
+  return [
+    'You are a research librarian curating SOCIAL sources for a content channel.',
+    `Niche: "${channel.niche}"`,
+    channel.target_group ? `Target audience: "${channel.target_group}"` : '',
+    '',
+    'Give me 3 more high-signal SOCIAL handles (X, YouTube, or Instagram) for this niche.',
+    'Active accounts only, posting at least weekly. Do NOT repeat any of these URLs:',
+    ...alreadyHave.map((u) => `  - ${u}`),
+    '',
+    'Use full profile URLs:',
+    '  - X: https://x.com/<handle>',
+    '  - YouTube: https://youtube.com/@<handle>',
+    '  - Instagram: https://instagram.com/<handle>',
+    '',
+    'Return ONLY a JSON array. No prose. Schema:',
+    '[{ "name": string, "url": string, "type_hint": "x"|"ig"|"yt", "why": string }]',
+  ].filter(Boolean).join('\n')
 }
 
 function parseSuggestions(text: string): Suggestion[] {

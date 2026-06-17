@@ -2,12 +2,18 @@ import { NextRequest, NextResponse } from 'next/server'
 import { dbList } from '@/lib/db'
 import { runChannelPipeline } from '@/lib/pipeline'
 import { getEmbedToken } from '@/lib/auth'
+import { dateInTz, hourInTz } from '@/lib/time'
 import type { ChannelRow } from '@/lib/types'
 
 // Hourly cron. For each channel: if local time = 10am and not yet run today, run.
+// AUTH: the scheduled-task callback carries a task token in the Authorization
+// header (app-creator identity, owner-scoped). The DB is per-app, so listing
+// 'channels' with no filter returns every owned channel. We also accept the
+// token in the POST body as a fallback. (issue #20)
 export async function POST(req: NextRequest) {
   try {
-    const token = getEmbedToken(req)
+    const body = await req.json().catch(() => ({}))
+    const token = getEmbedToken(req, body)
     const channels = await dbList<ChannelRow>('channels', {}, token)
     const utcNow = new Date()
 
@@ -37,23 +43,5 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ran_at: utcNow.toISOString(), results })
   } catch (e) {
     return NextResponse.json({ error: e instanceof Error ? e.message : 'cron failed' }, { status: 500 })
-  }
-}
-
-function hourInTz(utc: Date, tz: string): number {
-  try {
-    const fmt = new Intl.DateTimeFormat('en-US', { timeZone: tz, hour: '2-digit', hour12: false })
-    return Number(fmt.format(utc).replace(/[^0-9]/g, ''))
-  } catch {
-    return utc.getUTCHours()
-  }
-}
-
-function dateInTz(utc: Date, tz: string): string {
-  try {
-    const fmt = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' })
-    return fmt.format(utc)
-  } catch {
-    return utc.toISOString().slice(0, 10)
   }
 }
