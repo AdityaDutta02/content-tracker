@@ -11,8 +11,12 @@ import { canonicalizeUrl } from './canonical'
 import { callGateway } from './terminal-ai'
 import { dbList, dbInsert, dbUpdate } from './db'
 
-const TOP_N = 12
+const TOP_N = 10
 const MIN_TOP = 5
+const SOCIAL_QUOTA_TARGET = 3
+const SOCIAL_QUOTA_MIN = 2
+const ARTICLE_QUOTA = TOP_N - SOCIAL_QUOTA_TARGET // = 7
+const SOCIAL_TYPES = new Set<string>(['x', 'ig', 'yt'])
 const RECENT_RUNS_FOR_DEDUPE = 7
 const PRIMARY_AGE_MS = 7 * 24 * 60 * 60 * 1000
 const BACKFILL_AGE_MS = 30 * 24 * 60 * 60 * 1000
@@ -74,7 +78,7 @@ export async function runChannelPipeline(
     sources.map(async (s) => {
       const ms = SOURCE_TIMEOUT_MS[s.type] ?? DEFAULT_SOURCE_TIMEOUT_MS
       try {
-        const items = await withTimeout(fetchSource(s, channel), ms, `source ${s.type}:${s.id}`)
+        const items = await withTimeout(fetchSource(s, channel, embedToken), ms, `source ${s.type}:${s.id}`)
         for (const it of items) raw.push({ ...it, source_id: s.id })
       } catch (e) {
         errors.push({ source_id: s.id, error: e instanceof Error ? e.message : String(e) })
@@ -136,28 +140,63 @@ export async function runChannelPipeline(
     return b._t - a._t
   })
 
-  // Per-source diversity cap so one chatty feed cannot dominate the run.
-  // Cap = max(2, ceil(TOP_N / activeSourceCount)) but at least 2 to allow
-  // small libraries (few sources) to still fill the page.
-  const sourcesWithItems = new Set(deduped.map((d) => d.source_id)).size || 1
-  const perSourceCap = Math.max(2, Math.ceil(TOP_N / sourcesWithItems))
-  const perSourceCount = new Map<string, number>()
-  const top: Raw[] = []
-  for (const it of deduped) {
-    const n = perSourceCount.get(it.source_id) ?? 0
-    if (n >= perSourceCap) continue
-    perSourceCount.set(it.source_id, n + 1)
-    top.push(it)
-    if (top.length >= TOP_N) break
+  // Social quota. Partition into social (x/ig/yt) vs article (everything else)
+  // so chatty article feeds cannot crowd social cards out of the top slots.
+  // Target: 7 articles + 3 social, but each bucket backfills the other so the
+  // feed still fills to TOP_N when one bucket is thin.
+  const typeBySource = new Map(sources.map((s) => [s.id, s.type]))
+  const isSocial = (it: Aged) => SOCIAL_TYPES.has(typeBySource.get(it.source_id) ?? '')
+  const socialItems = deduped.filter(isSocial)
+  const articleItems = deduped.filter((it) => !isSocial(it))
+
+  // Per-source diversity cap applied WITHIN each bucket, not across.
+  function capPerSource(items: Aged[], quota: number): Aged[] {
+    const srcCount = new Set(items.map((d) => d.source_id)).size || 1
+    const cap = Math.max(2, Math.ceil(quota / srcCount))
+    const count = new Map<string, number>()
+    const out: Aged[] = []
+    for (const it of items) {
+      const n = count.get(it.source_id) ?? 0
+      if (n >= cap) continue
+      count.set(it.source_id, n + 1)
+      out.push(it)
+    }
+    return out
   }
-  // Fallback: if cap was too tight and we have headroom, top up from leftovers.
-  if (top.length < TOP_N) {
-    const inTop = new Set(top.map((t) => t.url))
-    for (const it of deduped) {
-      if (top.length >= TOP_N) break
-      if (!inTop.has(it.url)) top.push(it)
+  const cappedArticle = capPerSource(articleItems, ARTICLE_QUOTA)
+  const cappedSocial = capPerSource(socialItems, SOCIAL_QUOTA_TARGET)
+
+  // Buckets are disjoint, so primary picks never collide. Reserve up to TARGET
+  // social slots (≥ MIN whenever that many social items exist) + ARTICLE_QUOTA
+  // article slots, then backfill any shortfall from the other bucket, then from
+  // uncapped leftovers so a tight per-source cap never leaves empty slots.
+  const picked: Aged[] = [
+    ...cappedSocial.slice(0, SOCIAL_QUOTA_TARGET),
+    ...cappedArticle.slice(0, ARTICLE_QUOTA),
+  ]
+  const have = new Set(picked.map((p) => p.url))
+  const backfill = (pool: Aged[]) => {
+    for (const it of pool) {
+      if (picked.length >= TOP_N) break
+      if (have.has(it.url)) continue
+      have.add(it.url)
+      picked.push(it)
     }
   }
+  backfill(cappedArticle)
+  backfill(cappedSocial)
+  backfill(deduped)
+  if (socialItems.length >= SOCIAL_QUOTA_MIN && picked.filter(isSocial).length < SOCIAL_QUOTA_MIN) {
+    // Defensive: should not happen given the reserve above, but guarantees the floor.
+    backfill(socialItems)
+  }
+
+  // Final chronological sort so the feed reads newest-first, not bucket-grouped.
+  picked.sort((a, b) => {
+    if (a._undated !== b._undated) return a._undated ? 1 : -1
+    return b._t - a._t
+  })
+  const top: Raw[] = picked.slice(0, TOP_N)
 
   let credits_used = 0
   let summaries: string[] = top.map((t) => cleanShortSummary(t.summary))

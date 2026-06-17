@@ -5,7 +5,9 @@
 //
 // Routes reference: https://docs.rsshub.app
 
-const BASE = 'https://rsshub.app'
+// Point RSSHUB_BASE_URL at a self-hosted instance for reliability (rsshub.app
+// frequently 429/503s, especially on IG/X routes). Defaults to the public host.
+const BASE = (process.env.RSSHUB_BASE_URL?.replace(/\/+$/, '')) || 'https://rsshub.app'
 
 export interface RssHubMatch {
   rssUrl: string

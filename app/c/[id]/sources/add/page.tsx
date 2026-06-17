@@ -14,6 +14,16 @@ interface Detection {
   tier?: string
   sample?: { title: string; url: string }
   needs_byok?: boolean
+  cost?: 'free' | 'byok'
+  health?: 'ok' | 'untested' | 'down'
+}
+
+// FREE (green) — native / working rsshub. BYOK (amber) — apify-only.
+// DOWN (red) — every tier probe-failed. Defaults to FREE when unmarked.
+function CostBadge({ d }: { d: Detection }) {
+  if (d.health === 'down') return <Badge tone="err">down</Badge>
+  if (d.cost === 'byok') return <Badge tone="warn">byok</Badge>
+  return <Badge tone="ok">free</Badge>
 }
 
 const inputCls =
@@ -132,9 +142,9 @@ export default function AddSourcePage() {
         {detection && (
           <div className="rounded-lg border border-line bg-surface p-5 space-y-4">
             <div className="flex flex-wrap items-center gap-2">
-              <Badge tone={detection.needs_byok ? 'warn' : 'ok'}>{detection.type}</Badge>
-              {detection.tier && <Badge>{detection.tier}</Badge>}
-              {detection.needs_byok && <Badge muted>needs Firecrawl key</Badge>}
+              <Badge>{detection.type}</Badge>
+              <CostBadge d={detection} />
+              {detection.needs_byok && detection.type === 'web' && <Badge muted>needs Firecrawl key</Badge>}
             </div>
 
             {detection.sample && (

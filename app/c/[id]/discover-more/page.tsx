@@ -7,10 +7,28 @@ import { useViewer } from '@/hooks/use-viewer'
 import { Badge, Button, Checkbox, MonoCaption } from '@/components/ui/primitives'
 import { hostname } from '@/lib/format'
 
+interface Detection {
+  type: string
+  tier?: string
+  url?: string
+  handle?: string
+  scrape_config: Record<string, unknown>
+  needs_byok?: boolean
+  cost?: 'free' | 'byok'
+  health?: 'ok' | 'untested' | 'down'
+}
 interface Suggestion {
   suggestion: { name: string; url: string; type_hint?: string; why?: string }
-  detection: { type: string; tier?: string; url?: string; handle?: string; scrape_config: Record<string, unknown>; needs_byok?: boolean } | null
+  detection: Detection | null
   error?: string
+}
+
+// FREE (green) — native / working rsshub. BYOK (amber) — apify-only.
+// DOWN (red) — every tier probe-failed. Defaults to FREE when unmarked.
+function CostBadge({ d }: { d: Detection }) {
+  if (d.health === 'down') return <Badge tone="err">down</Badge>
+  if (d.cost === 'byok') return <Badge tone="warn">byok</Badge>
+  return <Badge tone="ok">free</Badge>
 }
 
 interface SourceRow {
@@ -238,7 +256,10 @@ export default function DiscoverMorePage() {
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="text-[15px] font-semibold tracking-tight text-ink">{s.suggestion.name}</span>
                       {s.detection ? (
-                        <Badge>{s.detection.type}{s.detection.tier ? ` · ${s.detection.tier}` : ''}</Badge>
+                        <>
+                          <Badge>{s.detection.type}</Badge>
+                          <CostBadge d={s.detection} />
+                        </>
                       ) : (
                         <Badge muted>unreachable</Badge>
                       )}
