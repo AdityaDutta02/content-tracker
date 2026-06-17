@@ -15,7 +15,7 @@ interface Detection {
   scrape_config: Record<string, unknown>
   needs_byok?: boolean
   cost?: 'free' | 'byok'
-  health?: 'ok' | 'untested' | 'down'
+  health?: 'ok' | 'low' | 'untested' | 'down'
 }
 interface Suggestion {
   suggestion: { name: string; url: string; type_hint?: string; why?: string }
@@ -27,6 +27,7 @@ interface Suggestion {
 // DOWN (red) — every tier probe-failed. Defaults to FREE when unmarked.
 function CostBadge({ d }: { d: Detection }) {
   if (d.health === 'down') return <Badge tone="err">down</Badge>
+  if (d.health === 'low') return <Badge tone="warn">low quality</Badge>
   if (d.cost === 'byok') return <Badge tone="warn">byok</Badge>
   return <Badge tone="ok">free</Badge>
 }
@@ -85,7 +86,10 @@ export default function DiscoverMorePage() {
         setSuggestions(fresh)
         const pre = new Set<number>()
         fresh.forEach((s: Suggestion, i: number) => {
-          if (s.detection && !s.detection.needs_byok) pre.add(i)
+          // Auto-select only confident, free sources. Weak ('low') or dead
+          // ('down') samples are surfaced but left unchecked (issue #21).
+          const h = s.detection?.health
+          if (s.detection && !s.detection.needs_byok && h !== 'low' && h !== 'down') pre.add(i)
         })
         setPicked(pre)
       } catch (e) {

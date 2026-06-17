@@ -63,5 +63,6 @@ export interface DetectionResult {
   available_tiers?: FetchTier[]
   recommended_tier?: FetchTier
   cost?: 'free' | 'byok'
-  health?: 'ok' | 'untested' | 'down'
+  // 'low' = passed detection but the sample scored weak (surfaced, not auto-selected).
+  health?: 'ok' | 'low' | 'untested' | 'down'
 }

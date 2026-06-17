@@ -1,6 +1,8 @@
 import type { DetectionResult, SourceType, FetchTier } from '../types'
 import { autodiscoverRss, fetchRss } from './rss'
-import { cheerioExtract, jinaExtract } from './web'
+import { cheerioExtractDetailed, jinaExtract } from './web'
+import { scoreSample } from './quality'
+import type { FetchedItem } from '../types'
 import { rsshubFor } from './rsshub'
 import { resolveYoutubeChannelId } from './youtube'
 import type { SocialPlatform } from './social-fetch'
@@ -117,6 +119,28 @@ async function detectSocial(platform: SocialPlatform, rawHandle: string): Promis
   return { ...base({}), recommended_tier: 'rsshub', cost: 'byok', health: 'down', needs_byok: true }
 }
 
+// Build a web DetectionResult, persisting a tight list_selector when one won
+// (null = the nav-harvesting fallback was used, so don't pin it).
+function webResult(
+  url: string,
+  tier: 'cheerio' | 'jina',
+  health: 'ok' | 'low' | 'down',
+  items: FetchedItem[],
+  listSelector: string | null,
+): DetectionResult {
+  const scrape_config: Record<string, unknown> = { tier }
+  if (listSelector) scrape_config.list_selector = listSelector
+  return {
+    type: 'web',
+    url,
+    scrape_config,
+    tier,
+    cost: 'free',
+    health,
+    sample: { title: items[0].title, url: items[0].url },
+  }
+}
+
 export async function detectSource(input: string): Promise<DetectionResult> {
   const known = matchKnownPlatform(input)
   if (known) {
@@ -136,18 +160,20 @@ export async function detectSource(input: string): Promise<DetectionResult> {
     return { type: 'rss', url: feed, scrape_config: { feed_url: feed }, tier: 'rss', cost: 'free', health: 'ok' }
   }
 
+  // Web scrape. Don't just count links (issue #21) — score the sample. A
+  // nav/listicle page returns health 'down' and lands pre-deselected in the
+  // picker; only 'ok'/'low' samples short-circuit. The winning tight selector is
+  // persisted as list_selector so runtime fetches skip the nav-harvesting
+  // 'main a[href]' fallback.
+  let weakWeb: DetectionResult | null = null
+
   try {
-    const items = await cheerioExtract(url)
+    const { items, selector } = await cheerioExtractDetailed(url)
     if (items.length >= 3) {
-      return {
-        type: 'web',
-        url,
-        scrape_config: { tier: 'cheerio' },
-        tier: 'cheerio',
-        cost: 'free',
-        health: 'ok',
-        sample: { title: items[0].title, url: items[0].url },
-      }
+      const score = scoreSample(items, url)
+      const result = webResult(url, 'cheerio', score.health, items, selector)
+      if (score.health !== 'down') return result
+      weakWeb = result
     }
   } catch {
     /* ignore */
@@ -156,19 +182,18 @@ export async function detectSource(input: string): Promise<DetectionResult> {
   try {
     const items = await jinaExtract(url)
     if (items.length >= 3) {
-      return {
-        type: 'web',
-        url,
-        scrape_config: { tier: 'jina' },
-        tier: 'jina',
-        cost: 'free',
-        health: 'ok',
-        sample: { title: items[0].title, url: items[0].url },
-      }
+      const score = scoreSample(items, url)
+      const result = webResult(url, 'jina', score.health, items, null)
+      if (score.health !== 'down') return result
+      weakWeb = weakWeb ?? result
     }
   } catch {
     /* ignore */
   }
+
+  // A scrape that only ever returned junk: surface it flagged 'down' rather than
+  // forcing a Firecrawl key for a source that probably isn't worth tracking.
+  if (weakWeb) return weakWeb
 
   const hasFirecrawl = !!process.env.FIRECRAWL_API_KEY
   return {

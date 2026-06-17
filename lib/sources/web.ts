@@ -43,24 +43,39 @@ async function tryJinaThenFirecrawl(url: string, config: WebConfig): Promise<Fet
 // also used by the channel-level firecrawl tier branch above
 
 
+// Tight, structural selectors first. The catch-all 'main a[href]' is a LAST
+// RESORT (issue #21): it harvests every link in <main> including nav, so it only
+// runs when no structured selector yielded a feed. detectSource persists the
+// winning tight selector so future fetches skip the catch-all entirely.
+const CHEERIO_SELECTORS = [
+  'article h2 a, article h3 a',
+  '.post-title a, .entry-title a',
+  'h2.title a, h3.title a',
+  'a.post-link, a.entry-link, a.story-link',
+]
+const CHEERIO_FALLBACK_SELECTOR = 'main a[href]'
+
 export async function cheerioExtract(url: string, selector?: string): Promise<FetchedItem[]> {
+  return (await cheerioExtractDetailed(url, selector)).items
+}
+
+// Like cheerioExtract but also reports which selector produced the feed, so the
+// caller can persist a tight list_selector instead of re-harvesting nav links.
+// `selector` is null when the catch-all fallback was used (don't persist it).
+export async function cheerioExtractDetailed(
+  url: string,
+  selector?: string,
+): Promise<{ items: FetchedItem[]; selector: string | null }> {
   const res = await fetch(url, { headers: { 'user-agent': UA }, signal: AbortSignal.timeout(15000) })
   if (!res.ok) throw new Error(`web fetch failed: ${res.status}`)
   const html = await res.text()
   const $ = cheerio.load(html)
-  const candidates: FetchedItem[] = []
 
-  const selectors = selector
-    ? [selector]
-    : [
-        'article h2 a, article h3 a',
-        '.post-title a, .entry-title a',
-        'h2.title a, h3.title a',
-        'a.post-link, a.entry-link, a.story-link',
-        'main a[href]',
-      ]
+  const tryList = selector ? [selector] : [...CHEERIO_SELECTORS, CHEERIO_FALLBACK_SELECTOR]
 
-  for (const sel of selectors) {
+  const collect = (sel: string): FetchedItem[] => {
+    const out: FetchedItem[] = []
+    const seen = new Set<string>()
     $(sel).each((_, el) => {
       const $el = $(el)
       const href = $el.attr('href')
@@ -68,21 +83,24 @@ export async function cheerioExtract(url: string, selector?: string): Promise<Fe
       if (!href || !title || title.length < 8) return
       try {
         const abs = new URL(href, url).href
-        candidates.push({ external_id: abs, title, url: abs })
+        if (seen.has(abs)) return
+        seen.add(abs)
+        out.push({ external_id: abs, title, url: abs })
       } catch {
         /* skip */
       }
     })
-    if (candidates.length >= 3) break
+    return out.slice(0, 30)
   }
 
-  const seen = new Set<string>()
-  const deduped = candidates.filter((c) => {
-    if (seen.has(c.url)) return false
-    seen.add(c.url)
-    return true
-  })
-  return deduped.slice(0, 30)
+  for (const sel of tryList) {
+    const items = collect(sel)
+    if (items.length >= 3) {
+      const isFallback = sel === CHEERIO_FALLBACK_SELECTOR
+      return { items, selector: isFallback ? null : sel }
+    }
+  }
+  return { items: [], selector: null }
 }
 
 export async function jinaExtract(url: string): Promise<FetchedItem[]> {

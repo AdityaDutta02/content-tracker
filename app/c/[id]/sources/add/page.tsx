@@ -15,13 +15,14 @@ interface Detection {
   sample?: { title: string; url: string }
   needs_byok?: boolean
   cost?: 'free' | 'byok'
-  health?: 'ok' | 'untested' | 'down'
+  health?: 'ok' | 'low' | 'untested' | 'down'
 }
 
 // FREE (green) — native / working rsshub. BYOK (amber) — apify-only.
 // DOWN (red) — every tier probe-failed. Defaults to FREE when unmarked.
 function CostBadge({ d }: { d: Detection }) {
   if (d.health === 'down') return <Badge tone="err">down</Badge>
+  if (d.health === 'low') return <Badge tone="warn">low quality</Badge>
   if (d.cost === 'byok') return <Badge tone="warn">byok</Badge>
   return <Badge tone="ok">free</Badge>
 }
