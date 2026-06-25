@@ -64,7 +64,7 @@ test('mapSocialPost: empty text falls back to a placeholder title', () => {
 
 test('fetchSocial: ig hits instagram/posts, strips @, maps items', async () => {
   mockGateway([{ platform: 'instagram', id: '1', text: 'hi', url: 'u' }])
-  const items = await fetchSocial('ig', '@nasa', {}, 'tok')
+  const items = await fetchSocial('ig', '@nasa', 'tok')
   assert.equal(calls[0].url, 'https://gw.test/scrape/instagram')
   assert.equal(calls[0].body?.operation, 'posts')
   assert.equal(calls[0].body?.handle, 'nasa')
@@ -73,7 +73,7 @@ test('fetchSocial: ig hits instagram/posts, strips @, maps items', async () => {
 
 test('fetchSocial: yt searches by handle (no channel-videos op)', async () => {
   mockGateway([])
-  await fetchSocial('yt', 'mkbhd', {}, 'tok')
+  await fetchSocial('yt', 'mkbhd', 'tok')
   assert.equal(calls[0].url, 'https://gw.test/scrape/youtube')
   assert.equal(calls[0].body?.operation, 'search')
   assert.equal(calls[0].body?.query, 'mkbhd')
@@ -81,34 +81,13 @@ test('fetchSocial: yt searches by handle (no channel-videos op)', async () => {
 
 test('fetchSocial: x hits twitter/tweets', async () => {
   mockGateway([])
-  await fetchSocial('x', '@sama', {}, 'tok')
+  await fetchSocial('x', '@sama', 'tok')
   assert.equal(calls[0].url, 'https://gw.test/scrape/twitter')
   assert.equal(calls[0].body?.operation, 'tweets')
   assert.equal(calls[0].body?.handle, 'sama')
 })
 
-test('fetchSocial: linkedin builds a company url from kind', async () => {
+test('fetchSocial: rejects unsupported social types', async () => {
   mockGateway([])
-  await fetchSocial('linkedin', 'acme', { kind: 'company' }, 'tok')
-  assert.equal(calls[0].url, 'https://gw.test/scrape/linkedin')
-  assert.equal(calls[0].body?.url, 'https://www.linkedin.com/company/acme')
-})
-
-test('fetchSocial: linkedin defaults to /in/ for profile kind', async () => {
-  mockGateway([])
-  await fetchSocial('linkedin', 'jane-doe', { kind: 'profile' }, 'tok')
-  assert.equal(calls[0].body?.url, 'https://www.linkedin.com/in/jane-doe')
-})
-
-test('fetchSocial: fb builds a page url from handle', async () => {
-  mockGateway([])
-  await fetchSocial('fb', 'nasa', {}, 'tok')
-  assert.equal(calls[0].url, 'https://gw.test/scrape/facebook')
-  assert.equal(calls[0].body?.url, 'https://www.facebook.com/nasa')
-})
-
-test('fetchSocial: fb passes through an explicit url', async () => {
-  mockGateway([])
-  await fetchSocial('fb', 'https://www.facebook.com/NASA', {}, 'tok')
-  assert.equal(calls[0].body?.url, 'https://www.facebook.com/NASA')
+  await assert.rejects(fetchSocial('fb' as 'ig', 'nasa', 'tok'), /unsupported social type/)
 })

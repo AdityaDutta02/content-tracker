@@ -28,22 +28,8 @@ function matchKnownPlatform(input: string): KnownMatch | null {
   const ig = url.match(/instagram\.com\/([^/?#]+)/i)
   if (ig) return { social: { platform: 'ig', handle: ig[1] } }
 
-  // FB / LinkedIn fetch through the managed gateway like the other socials —
-  // no BYOK key needed, marked healthy. LinkedIn keeps a kind (company|profile)
-  // so the runtime builds the right URL.
-  const fb = url.match(/facebook\.com\/([^/?#]+)/i)
-  if (fb) return plain({ type: 'fb', handle: fb[1], scrape_config: { fetch_tier: 'gateway' }, tier: 'platform', cost: 'free', health: 'ok' })
-
-  const liCo = url.match(/linkedin\.com\/(?:company|school|showcase)\/([^/?#]+)/i)
-  if (liCo) return plain({ type: 'linkedin', handle: liCo[1], scrape_config: { kind: 'company', fetch_tier: 'gateway' }, tier: 'platform', cost: 'free', health: 'ok' })
-  const liIn = url.match(/linkedin\.com\/in\/([^/?#]+)/i)
-  if (liIn) return plain({ type: 'linkedin', handle: liIn[1], scrape_config: { kind: 'profile', fetch_tier: 'gateway' }, tier: 'platform', cost: 'free', health: 'ok' })
-  const liPosts = url.match(/linkedin\.com\/(?:in|company|school|showcase)\/([^/?#]+)\/(?:recent-activity|posts)/i)
-  if (liPosts) return plain({ type: 'linkedin', handle: liPosts[1], scrape_config: { kind: 'profile', fetch_tier: 'gateway' }, tier: 'platform', cost: 'free', health: 'ok' })
-  const liBare = url.match(/^(?:https?:\/\/)?(?:www\.)?linkedin\.com\/([^/?#]+)\/?$/i)
-  if (liBare && !/^(feed|login|signup|jobs|learning|notifications|messaging|mynetwork|search|help)$/i.test(liBare[1])) {
-    return plain({ type: 'linkedin', handle: liBare[1], scrape_config: { kind: 'profile', fetch_tier: 'gateway' }, tier: 'platform', cost: 'free', health: 'ok' })
-  }
+  // FB / LinkedIn are not scraped by this app (see lib/sources/limits.ts) — fall
+  // through so they aren't suggested as addable sources.
 
   const reddit = url.match(/reddit\.com\/r\/([^/?#]+)/i)
   if (reddit) {

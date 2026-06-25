@@ -6,8 +6,6 @@ import { fetchArxiv } from './arxiv'
 import { fetchWeb } from './web'
 import { fetchSocial } from './social-fetch'
 
-const SOCIAL_TYPES = new Set<SourceRow['type']>(['x', 'ig', 'yt', 'fb', 'linkedin'])
-
 // embedToken authenticates gateway calls. Social sources scrape via the gateway
 // (owner-only), so the token is REQUIRED for them — the pipeline passes the cron
 // task token (owner identity) or the owner's embed token.
@@ -34,17 +32,18 @@ export async function fetchSource(
       })
     case 'x':
     case 'ig':
-    case 'yt':
-    case 'fb':
-    case 'linkedin': {
+    case 'yt': {
       if (!embedToken) throw new Error(`${source.type} source needs a gateway token (owner-only scrape)`)
       const handle = source.handle ?? source.url ?? ''
-      return fetchSocial(source.type, handle, cfg, embedToken)
+      return fetchSocial(source.type, handle, embedToken)
     }
+    case 'fb':
+    case 'linkedin':
+      // Not scraped by this app (too pricey / low signal) — see lib/sources/limits.ts.
+      return []
     default:
       throw new Error(`unknown source type: ${source.type}`)
   }
 }
 
 export { detectSource } from './detect'
-export { SOCIAL_TYPES }
