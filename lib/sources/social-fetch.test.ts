@@ -1,46 +1,93 @@
-import { test } from 'node:test'
+import { test, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
-import { tierOrder } from './social-fetch'
-import { isChannelId } from './youtube'
+import { fetchSocial, mapSocialPost } from './social-fetch'
+import type { SocialPost } from '../scrape-sdk'
 
-test('isChannelId: accepts UC ids, rejects handles', () => {
-  assert.equal(isChannelId('UCXuqSBlHAE6Xw-yeJA0Tunw'), true)
-  assert.equal(isChannelId('@UCXuqSBlHAE6Xw-yeJA0Tunw'), true) // tolerates leading @
-  assert.equal(isChannelId('mkbhd'), false)
-  assert.equal(isChannelId('@mkbhd'), false)
-  assert.equal(isChannelId('UCshort'), false)
+process.env.TERMINAL_AI_GATEWAY_URL = 'https://gw.test'
+
+const realFetch = globalThis.fetch
+afterEach(() => {
+  globalThis.fetch = realFetch
 })
 
-test('tierOrder: platform defaults', () => {
-  delete process.env.SOCIAL_FETCH_TIERS
-  delete process.env.SOCIAL_FETCH_TIERS_YT
-  delete process.env.SOCIAL_FETCH_TIERS_X
-  assert.deepEqual(tierOrder('yt', {}), ['native', 'rsshub', 'apify'])
-  assert.deepEqual(tierOrder('x', {}), ['rsshub', 'apify'])
-  assert.deepEqual(tierOrder('ig', {}), ['rsshub', 'apify'])
+interface Call {
+  url: string
+  body: Record<string, unknown> | null
+}
+let calls: Call[] = []
+
+function fakeRes(body: unknown): Response {
+  return {
+    ok: true,
+    status: 200,
+    statusText: 'OK',
+    headers: { get: () => null },
+    json: async () => body,
+  } as unknown as Response
+}
+
+// Every social fetch resolves to one inline-done gateway response carrying items.
+function mockGateway(items: Partial<SocialPost>[]): void {
+  calls = []
+  globalThis.fetch = (async (url: string | URL | Request, opts: RequestInit = {}) => {
+    calls.push({ url: String(url), body: opts.body ? JSON.parse(opts.body as string) : null })
+    return fakeRes({ status: 'done', data: { items }, credits_charged: 0 })
+  }) as typeof fetch
+}
+
+test('mapSocialPost: maps a normalized post to FetchedItem', () => {
+  const item = mapSocialPost('ig', {
+    platform: 'instagram',
+    id: 'abc',
+    text: 'Hello world\nsecond line',
+    createdAt: '2026-06-20T00:00:00.000Z',
+    likes: 5,
+    comments: 2,
+    shares: 1,
+    views: 9,
+    mediaUrls: ['http://img'],
+    url: 'http://post',
+  })
+  assert.equal(item.external_id, 'ig:abc')
+  assert.equal(item.title, 'Hello world')
+  assert.equal(item.url, 'http://post')
+  assert.equal(item.image_url, 'http://img')
+  assert.equal(item.published_at, '2026-06-20T00:00:00.000Z')
+  assert.deepEqual(item.engagement, { likes: 5, comments: 2, reposts: 1, views: 9 })
 })
 
-test('tierOrder: drops native for non-yt platforms', () => {
-  const order = tierOrder('x', { fetch_tiers: ['native', 'rsshub', 'apify'] })
-  assert.equal(order.includes('native'), false)
-  assert.deepEqual(order, ['rsshub', 'apify'])
+test('mapSocialPost: empty text falls back to a placeholder title', () => {
+  const item = mapSocialPost('yt', { platform: 'youtube', id: 'v', url: 'http://v' })
+  assert.equal(item.title, 'yt post')
+  assert.equal(item.summary, '')
 })
 
-test('tierOrder: floats a cached successful tier to the front', () => {
-  assert.deepEqual(tierOrder('yt', { fetch_tier: 'apify' }), ['apify', 'native', 'rsshub'])
-  assert.deepEqual(tierOrder('x', { fetch_tier: 'apify' }), ['apify', 'rsshub'])
+test('fetchSocial: ig hits instagram/posts, strips @, maps items', async () => {
+  mockGateway([{ platform: 'instagram', id: '1', text: 'hi', url: 'u' }])
+  const items = await fetchSocial('ig', '@nasa', 'tok')
+  assert.equal(calls[0].url, 'https://gw.test/scrape/instagram')
+  assert.equal(calls[0].body?.operation, 'posts')
+  assert.equal(calls[0].body?.handle, 'nasa')
+  assert.equal(items[0].external_id, 'ig:1')
 })
 
-test('tierOrder: ignores a cached tier that is not in the valid set', () => {
-  // native cached for X is invalid → not floated, native dropped
-  assert.deepEqual(tierOrder('x', { fetch_tier: 'native' }), ['rsshub', 'apify'])
+test('fetchSocial: yt searches by handle (no channel-videos op)', async () => {
+  mockGateway([])
+  await fetchSocial('yt', 'mkbhd', 'tok')
+  assert.equal(calls[0].url, 'https://gw.test/scrape/youtube')
+  assert.equal(calls[0].body?.operation, 'search')
+  assert.equal(calls[0].body?.query, 'mkbhd')
 })
 
-test('tierOrder: env override wins over default', () => {
-  process.env.SOCIAL_FETCH_TIERS_YT = 'apify, native'
-  try {
-    assert.deepEqual(tierOrder('yt', {}), ['apify', 'native'])
-  } finally {
-    delete process.env.SOCIAL_FETCH_TIERS_YT
-  }
+test('fetchSocial: x hits twitter/tweets', async () => {
+  mockGateway([])
+  await fetchSocial('x', '@sama', 'tok')
+  assert.equal(calls[0].url, 'https://gw.test/scrape/twitter')
+  assert.equal(calls[0].body?.operation, 'tweets')
+  assert.equal(calls[0].body?.handle, 'sama')
+})
+
+test('fetchSocial: rejects unsupported social types', async () => {
+  mockGateway([])
+  await assert.rejects(fetchSocial('fb' as 'ig', 'nasa', 'tok'), /unsupported social type/)
 })

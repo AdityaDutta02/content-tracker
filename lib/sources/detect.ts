@@ -1,10 +1,9 @@
-import type { DetectionResult, SourceType, FetchTier } from '../types'
-import { autodiscoverRss, fetchRss } from './rss'
+import type { DetectionResult, SourceType } from '../types'
+import { autodiscoverRss } from './rss'
 import { cheerioExtractDetailed, jinaExtract } from './web'
 import { scoreSample } from './quality'
 import type { FetchedItem } from '../types'
 import { rsshubFor } from './rsshub'
-import { resolveYoutubeChannelId } from './youtube'
 import type { SocialPlatform } from './social-fetch'
 
 interface KnownMatch {
@@ -12,12 +11,6 @@ interface KnownMatch {
   // resolves synchronously to a DetectionResult.
   social?: { platform: SocialPlatform; handle: string }
   result?: DetectionResult
-}
-
-const SOCIAL_DEFAULT_TIERS: Record<SocialPlatform, FetchTier[]> = {
-  yt: ['native', 'rsshub', 'apify'],
-  x: ['rsshub', 'apify'],
-  ig: ['rsshub', 'apify'],
 }
 
 function plain(result: DetectionResult): KnownMatch {
@@ -35,22 +28,8 @@ function matchKnownPlatform(input: string): KnownMatch | null {
   const ig = url.match(/instagram\.com\/([^/?#]+)/i)
   if (ig) return { social: { platform: 'ig', handle: ig[1] } }
 
-  // Facebook has no reliable public RSS path even via RSSHub. Surface but mark needs_byok.
-  const fb = url.match(/facebook\.com\/([^/?#]+)/i)
-  if (fb) return plain({ type: 'fb', handle: fb[1], scrape_config: {}, tier: 'platform', cost: 'byok', needs_byok: !process.env.APIFY_API_KEY })
-
-  // LinkedIn posts/profiles aren't reliably available via RSSHub either.
-  // Keep platform type so user can BYOK or skip.
-  const liCo = url.match(/linkedin\.com\/(?:company|school|showcase)\/([^/?#]+)/i)
-  if (liCo) return plain({ type: 'linkedin', handle: liCo[1], scrape_config: { kind: 'company' }, tier: 'platform', cost: 'byok' })
-  const liIn = url.match(/linkedin\.com\/in\/([^/?#]+)/i)
-  if (liIn) return plain({ type: 'linkedin', handle: liIn[1], scrape_config: { kind: 'profile' }, tier: 'platform', cost: 'byok' })
-  const liPosts = url.match(/linkedin\.com\/(?:in|company|school|showcase)\/([^/?#]+)\/(?:recent-activity|posts)/i)
-  if (liPosts) return plain({ type: 'linkedin', handle: liPosts[1], scrape_config: { kind: 'profile' }, tier: 'platform', cost: 'byok' })
-  const liBare = url.match(/^(?:https?:\/\/)?(?:www\.)?linkedin\.com\/([^/?#]+)\/?$/i)
-  if (liBare && !/^(feed|login|signup|jobs|learning|notifications|messaging|mynetwork|search|help)$/i.test(liBare[1])) {
-    return plain({ type: 'linkedin', handle: liBare[1], scrape_config: { kind: 'profile' }, tier: 'platform', cost: 'byok' })
-  }
+  // FB / LinkedIn are not scraped by this app (see lib/sources/limits.ts) — fall
+  // through so they aren't suggested as addable sources.
 
   const reddit = url.match(/reddit\.com\/r\/([^/?#]+)/i)
   if (reddit) {
@@ -69,54 +48,22 @@ function matchKnownPlatform(input: string): KnownMatch | null {
   return null
 }
 
-// Quick "does this feed return anything" probe with a hard timeout so discovery
-// of 10 sources doesn't stall on one slow RSSHub route.
-async function probeRss(url: string, ms = 8000): Promise<boolean> {
-  try {
-    const items = await Promise.race([
-      fetchRss(url),
-      new Promise<never>((_, rej) => setTimeout(() => rej(new Error('probe timeout')), ms)),
-    ])
-    return items.length > 0
-  } catch {
-    return false
-  }
-}
-
-// Probe a social handle across tiers but NEVER drop it. Worst case returns the
-// suggestion marked health:'down' so the UI can show it and let the user decide.
+// Social handles all resolve through the managed gateway scrape path, so there's
+// no tier probing to do — the handle is accepted and marked healthy. The gateway
+// fetch is owner-only and costs credits at run time, but the user supplies no key
+// of their own, so from the add-source UX this is a no-setup ('free') source.
 async function detectSocial(platform: SocialPlatform, rawHandle: string): Promise<DetectionResult> {
   const handle = rawHandle.trim().replace(/^@/, '')
-  const tiers = SOCIAL_DEFAULT_TIERS[platform]
-  const base = (cfg: Record<string, unknown>): DetectionResult => ({
+  return {
     type: platform,
     handle,
-    scrape_config: { fetch_tiers: tiers, ...cfg },
+    scrape_config: { fetch_tier: 'gateway' },
     tier: 'platform',
-    available_tiers: tiers,
-  })
-
-  // YouTube tier 1: native RSS. Resolve + cache the channel id.
-  if (platform === 'yt') {
-    const channelId = await resolveYoutubeChannelId(handle)
-    if (channelId) {
-      return { ...base({ channel_id: channelId }), recommended_tier: 'native', cost: 'free', health: 'ok' }
-    }
+    available_tiers: ['gateway'],
+    recommended_tier: 'gateway',
+    cost: 'free',
+    health: 'ok',
   }
-
-  // Tier 2: RSSHub (free).
-  const m = rsshubFor(platform, handle)
-  if (m && (await probeRss(m.rssUrl))) {
-    return { ...base({}), recommended_tier: 'rsshub', cost: 'free', health: 'ok' }
-  }
-
-  // RSSHub didn't answer. Apify (BYOK) is the remaining viable path.
-  if (process.env.APIFY_API_KEY) {
-    return { ...base({}), recommended_tier: 'apify', cost: 'byok', health: 'untested', needs_byok: false }
-  }
-
-  // No free probe succeeded and no Apify key — surface as down, still keep it.
-  return { ...base({}), recommended_tier: 'rsshub', cost: 'byok', health: 'down', needs_byok: true }
 }
 
 // Build a web DetectionResult, persisting a tight list_selector when one won

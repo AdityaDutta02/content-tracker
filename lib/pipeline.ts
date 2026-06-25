@@ -7,6 +7,7 @@
 //   1× update channels.last_run_date
 import type { ChannelRow, SourceRow, FetchedItem } from './types'
 import { fetchSource } from './sources'
+import { selectActiveSources, nextCooldown, SOCIAL_SOURCE_TYPES } from './sources/limits'
 import { canonicalizeUrl } from './canonical'
 import { callGateway } from './terminal-ai'
 import { dbList, dbInsert, dbUpdate } from './db'
@@ -33,11 +34,13 @@ const SOURCE_TIMEOUT_MS: Record<string, number> = {
   reddit: 20_000,
   arxiv: 20_000,
   web: 35_000,
-  x: 45_000,
-  ig: 45_000,
-  fb: 45_000,
-  yt: 45_000,
-  linkedin: 45_000,
+  // Social fetches now go through the gateway, which starts a job and polls
+  // upstream (deadline 80s in scrape-sdk) — give the whole call headroom.
+  x: 90_000,
+  ig: 90_000,
+  fb: 90_000,
+  yt: 90_000,
+  linkedin: 90_000,
 }
 const DEFAULT_SOURCE_TIMEOUT_MS = 30_000
 
@@ -78,9 +81,15 @@ export async function runChannelPipeline(
     return { status: 'failed', item_count: 0, credits_used: 0, errors: [{ source_id: 'none', error: 'no enabled sources' }] }
   }
 
+  // Rotation + budget: fetch at most 10 sources (≤4 social) per run, highest
+  // last-run yield first. Resting (cooled-down) sources sit out and rotate back
+  // in later. This caps paid social scrapes and avoids spending on dead sources.
+  const activeSources = selectActiveSources(sources)
+  const activeIds = new Set(activeSources.map((s) => s.id))
+
   const raw: Raw[] = []
   await Promise.all(
-    sources.map(async (s) => {
+    activeSources.map(async (s) => {
       const ms = SOURCE_TIMEOUT_MS[s.type] ?? DEFAULT_SOURCE_TIMEOUT_MS
       try {
         const items = await withTimeout(fetchSource(s, channel, embedToken), ms, `source ${s.type}:${s.id}`)
@@ -97,17 +106,12 @@ export async function runChannelPipeline(
   // drift (redesign turns articles into nav). Drop non-article items from web
   // sources before they reach the feed. Structured sources (rss/hn/reddit/arxiv)
   // and social cards are trusted as-is.
-  const srcType = new Map(sources.map((s) => [s.id, s.type]))
-  const srcUrl = new Map(sources.map((s) => [s.id, s.url ?? undefined]))
+  const srcType = new Map(activeSources.map((s) => [s.id, s.type]))
+  const srcUrl = new Map(activeSources.map((s) => [s.id, s.url ?? undefined]))
   const isWeb = (sourceId: string) => srcType.get(sourceId) === 'web'
   const articleClean = raw.filter(
     (r) => !isWeb(r.source_id) || looksLikeArticle(r, srcUrl.get(r.source_id)),
   )
-
-  // Auto-silence drifted web sources: if a web source returned items but ZERO
-  // survived the article filter, count it as an empty run; after N consecutive
-  // empties, disable it and surface the reason in the Sources tab. Fire-and-forget.
-  await reconcileWebSourceHealth(sources, raw, articleClean, srcType, embedToken)
 
   const recentRuns = await dbList<RunRow>('runs', { channel_id: channel.id }, embedToken)
   const seenUrls = new Set<string>()
@@ -154,6 +158,11 @@ export async function runChannelPipeline(
     seenThisRun.add(it.url)
     deduped.push(it)
   }
+
+  // Per-source yield for rotation: how many fresh, de-duped items each active
+  // source contributed this run. Drives next run's cooldown/ranking.
+  const yieldBySource = new Map<string, number>()
+  for (const it of deduped) yieldBySource.set(it.source_id, (yieldBySource.get(it.source_id) ?? 0) + 1)
 
   // Chronological newest-first; undated items sink to bottom.
   deduped.sort((a, b) => {
@@ -270,6 +279,20 @@ export async function runChannelPipeline(
     await dbUpdate<ChannelRow>('channels', channel.id, { last_run_date: today }, embedToken).catch(() => undefined)
   }
 
+  // Reconcile per-source rotation state + web-drift health (best-effort; never
+  // blocks the feed). Combined into one write per source so the two concerns
+  // can't clobber each other's scrape_config keys.
+  await reconcileSources({
+    activeSources,
+    sources,
+    activeIds,
+    raw,
+    articleClean,
+    yieldBySource,
+    srcType,
+    embedToken,
+  })
+
   return {
     status,
     item_count: itemsJson.length,
@@ -279,51 +302,89 @@ export async function runChannelPipeline(
   }
 }
 
-// Track per-web-source "empty run" streaks (issue #22). A run where the source
-// returned items but none survived the article filter increments the streak;
-// after SILENCE_AFTER_EMPTY_RUNS the source is disabled with a visible reason.
-// A run that produces real items resets the streak. Fetch failures (0 fetched)
-// are ignored here — they're transient, not drift. All writes are best-effort.
-async function reconcileWebSourceHealth(
-  sources: SourceRow[],
-  raw: Raw[],
-  clean: Raw[],
-  srcType: Map<string, string>,
-  embedToken: string,
-): Promise<void> {
+// Post-run per-source reconciliation, combining two concerns into one write per
+// source (so they can't clobber each other's scrape_config):
+//   1. Rotation (all active sources): record _yield; social sources also get a
+//      _cooldown so a dead account rotates out and rests before being retried.
+//   2. Web-drift auto-silence (issue #22): a web source that returned items but
+//      none article-like for SILENCE_AFTER_EMPTY_RUNS consecutive runs is
+//      disabled with a visible reason; a productive run clears the streak.
+// Resting (benched) social sources have their cooldown decremented so they
+// rotate back in. All writes are best-effort and never block the feed.
+async function reconcileSources(args: {
+  activeSources: SourceRow[]
+  sources: SourceRow[]
+  activeIds: Set<string>
+  raw: Raw[]
+  articleClean: Raw[]
+  yieldBySource: Map<string, number>
+  srcType: Map<string, string>
+  embedToken: string
+}): Promise<void> {
+  const { activeSources, sources, activeIds, raw, articleClean, yieldBySource, srcType, embedToken } = args
+
   const fetchedCount = new Map<string, number>()
   const goodCount = new Map<string, number>()
   for (const r of raw) fetchedCount.set(r.source_id, (fetchedCount.get(r.source_id) ?? 0) + 1)
-  for (const r of clean) goodCount.set(r.source_id, (goodCount.get(r.source_id) ?? 0) + 1)
+  for (const r of articleClean) goodCount.set(r.source_id, (goodCount.get(r.source_id) ?? 0) + 1)
+
+  const TRACKED = ['_yield', '_cooldown', '_empty_runs'] as const
+  const cfgChanged = (prev: Record<string, unknown>, next: Record<string, unknown>): boolean =>
+    TRACKED.some((k) => prev[k] !== next[k])
 
   const updates: Array<Promise<unknown>> = []
-  for (const s of sources) {
-    if (srcType.get(s.id) !== 'web') continue
-    const fetched = fetchedCount.get(s.id) ?? 0
-    if (fetched === 0) continue // fetch failed/empty — transient, don't penalize
-    const good = goodCount.get(s.id) ?? 0
-    const cfg = s.scrape_config ?? {}
-    const prevEmpty = Number((cfg._empty_runs as number | undefined) ?? 0)
 
-    if (good === 0) {
-      const empty = prevEmpty + 1
-      const patch: Partial<SourceRow> = { scrape_config: { ...cfg, _empty_runs: empty } }
-      if (empty >= SILENCE_AFTER_EMPTY_RUNS) {
-        patch.enabled = false
-        patch.last_fetch_error = `Silenced: no article-like items in ${empty} runs (source may have changed)`
+  for (const s of activeSources) {
+    const cfg = s.scrape_config ?? {}
+    const nextCfg: Record<string, unknown> = { ...cfg }
+    const patch: Partial<SourceRow> = {}
+
+    // Rotation yield. Social sources also carry a cooldown (paid → bench duds).
+    const y = yieldBySource.get(s.id) ?? 0
+    nextCfg._yield = y
+    if (SOCIAL_SOURCE_TYPES.has(s.type)) nextCfg._cooldown = nextCooldown(y)
+
+    // Web drift auto-silence.
+    if (srcType.get(s.id) === 'web') {
+      const fetched = fetchedCount.get(s.id) ?? 0
+      const good = goodCount.get(s.id) ?? 0
+      if (fetched > 0) {
+        const prevEmpty = Number((cfg._empty_runs as number | undefined) ?? 0)
+        if (good === 0) {
+          const empty = prevEmpty + 1
+          nextCfg._empty_runs = empty
+          if (empty >= SILENCE_AFTER_EMPTY_RUNS) {
+            patch.enabled = false
+            patch.last_fetch_error = `Silenced: no article-like items in ${empty} runs (source may have changed)`
+          }
+        } else if (prevEmpty !== 0) {
+          nextCfg._empty_runs = 0
+          patch.last_fetch_error = null
+        }
       }
-      updates.push(dbUpdate<SourceRow>('sources', s.id, patch, embedToken).catch(() => undefined))
-    } else if (prevEmpty !== 0) {
+    }
+
+    if (cfgChanged(cfg, nextCfg) || patch.enabled !== undefined || patch.last_fetch_error !== undefined) {
       updates.push(
-        dbUpdate<SourceRow>(
-          'sources',
-          s.id,
-          { scrape_config: { ...cfg, _empty_runs: 0 }, last_fetch_error: null },
-          embedToken,
-        ).catch(() => undefined),
+        dbUpdate<SourceRow>('sources', s.id, { scrape_config: nextCfg, ...patch }, embedToken).catch(() => undefined),
       )
     }
   }
+
+  // Benched social sources: tick down their cooldown so they rotate back in.
+  for (const s of sources) {
+    if (activeIds.has(s.id) || !SOCIAL_SOURCE_TYPES.has(s.type)) continue
+    const cfg = s.scrape_config ?? {}
+    const cd = Number(cfg._cooldown ?? 0)
+    if (cd > 0) {
+      updates.push(
+        dbUpdate<SourceRow>('sources', s.id, { scrape_config: { ...cfg, _cooldown: cd - 1 } }, embedToken).catch(
+          () => undefined,
+        ),
+      )
+    }
+  }
+
   await Promise.all(updates)
 }
 

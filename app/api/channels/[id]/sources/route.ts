@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { dbList, dbInsert } from '@/lib/db'
 import { getEmbedToken } from '@/lib/auth'
 import { errorResponse } from '@/lib/api-helpers'
+import { assertCanAddSource } from '@/lib/sources/limits'
 import type { SourceRow, SourceType } from '@/lib/types'
 
 const CreateSchema = z.object({
@@ -28,6 +29,12 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   try {
     const body = CreateSchema.parse(await req.json())
+
+    // Enforce the social cap (≤4 IG/X/YT) and reject unsupported platforms before
+    // inserting. Counts the channel's existing enabled sources.
+    const existing = await dbList<SourceRow>('sources', { channel_id: params.id }, body.embedToken)
+    assertCanAddSource(body.type as SourceType, existing)
+
     const row = await dbInsert<SourceRow>(
       'sources',
       {
