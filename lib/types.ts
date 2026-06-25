@@ -1,7 +1,9 @@
 export type SourceType = 'rss' | 'hn' | 'reddit' | 'arxiv' | 'yt' | 'x' | 'ig' | 'fb' | 'linkedin' | 'web'
 
-// Per-source social fetch tier (see lib/sources/social-fetch.ts).
-export type FetchTier = 'native' | 'rsshub' | 'apify'
+// Social fetch path. Social sources now fetch through the Terminal AI gateway
+// ('gateway'); the legacy per-tier values are retained only so older stored
+// scrape_config rows still type-check (they're ignored at runtime).
+export type FetchTier = 'native' | 'rsshub' | 'apify' | 'gateway'
 
 // Typed shape of scrape_config for social sources. scrape_config stays a loose
 // Record on SourceRow; this documents the keys the social path reads/writes.

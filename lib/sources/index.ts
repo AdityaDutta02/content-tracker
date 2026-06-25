@@ -4,12 +4,13 @@ import { fetchHn } from './hn'
 import { fetchReddit } from './reddit'
 import { fetchArxiv } from './arxiv'
 import { fetchWeb } from './web'
-import { apifyRun } from './apify'
-import { fetchSocial, type SocialPlatform } from './social-fetch'
-import { dbUpdate } from '../db'
+import { fetchSocial } from './social-fetch'
 
-// embedToken (optional) lets the social path persist the chosen fetch tier back
-// to scrape_config so later runs skip dead tiers. Best-effort; never blocks items.
+const SOCIAL_TYPES = new Set<SourceRow['type']>(['x', 'ig', 'yt', 'fb', 'linkedin'])
+
+// embedToken authenticates gateway calls. Social sources scrape via the gateway
+// (owner-only), so the token is REQUIRED for them — the pipeline passes the cron
+// task token (owner identity) or the owner's embed token.
 export async function fetchSource(
   source: SourceRow,
   channel: ChannelRow,
@@ -33,29 +34,12 @@ export async function fetchSource(
       })
     case 'x':
     case 'ig':
-    case 'yt': {
-      const handle = source.handle ?? source.url ?? ''
-      const res = await fetchSocial(source.type as SocialPlatform, handle, cfg, channel)
-      if (res.configPatch && embedToken) {
-        const changed = Object.entries(res.configPatch).some(([k, v]) => cfg[k] !== v)
-        if (changed) {
-          await dbUpdate('sources', source.id, { scrape_config: { ...cfg, ...res.configPatch } }, embedToken).catch(
-            () => undefined,
-          )
-        }
-      }
-      return res.items
-    }
+    case 'yt':
     case 'fb':
     case 'linkedin': {
-      // No reliable free tier — Apify BYOK only.
-      const key = channel.scraper_byok_key ?? process.env.APIFY_API_KEY
-      if (!key) throw new Error(`${source.type} source needs Apify BYOK key (channel.scraper_byok_key or APIFY_API_KEY env)`)
-      return apifyRun(source.type, source.handle ?? source.url ?? '', key, {
-        actor_id: cfg.actor_id as string,
-        input: cfg.input as Record<string, unknown> | undefined,
-        kind: cfg.kind as string | undefined,
-      })
+      if (!embedToken) throw new Error(`${source.type} source needs a gateway token (owner-only scrape)`)
+      const handle = source.handle ?? source.url ?? ''
+      return fetchSocial(source.type, handle, cfg, embedToken)
     }
     default:
       throw new Error(`unknown source type: ${source.type}`)
@@ -63,3 +47,4 @@ export async function fetchSource(
 }
 
 export { detectSource } from './detect'
+export { SOCIAL_TYPES }

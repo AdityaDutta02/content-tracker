@@ -33,11 +33,13 @@ const SOURCE_TIMEOUT_MS: Record<string, number> = {
   reddit: 20_000,
   arxiv: 20_000,
   web: 35_000,
-  x: 45_000,
-  ig: 45_000,
-  fb: 45_000,
-  yt: 45_000,
-  linkedin: 45_000,
+  // Social fetches now go through the gateway, which starts a job and polls
+  // upstream (deadline 80s in scrape-sdk) — give the whole call headroom.
+  x: 90_000,
+  ig: 90_000,
+  fb: 90_000,
+  yt: 90_000,
+  linkedin: 90_000,
 }
 const DEFAULT_SOURCE_TIMEOUT_MS = 30_000
 
