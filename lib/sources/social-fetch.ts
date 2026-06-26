@@ -51,26 +51,34 @@ function mapList(type: SourceType, list: SocialList): FetchedItem[] {
   return (list.items ?? []).map((p) => mapSocialPost(type, p))
 }
 
+/** Items plus the exact gateway credits the scrape charged (for cost transparency). */
+export interface SocialFetchResult {
+  items: FetchedItem[]
+  credits: number
+}
+
 /**
  * Fetch recent items for a gateway-scraped social source (IG/X). `handle` is the
- * account handle. Throws on gateway failure — the pipeline records it. YouTube is
- * fetched separately via native RSS (lib/sources/youtube.ts), not here.
+ * account handle. Returns the items and the exact `credits_charged` the gateway
+ * billed, so the pipeline can record a truthful per-run cost. Throws on gateway
+ * failure — the pipeline records it. YouTube is fetched separately via native RSS
+ * (lib/sources/youtube.ts), not here.
  */
 export async function fetchSocial(
   type: SourceType,
   handle: string,
   token: string,
-): Promise<FetchedItem[]> {
+): Promise<SocialFetchResult> {
   const opts = { limit: LIST_LIMIT }
   const h = cleanHandle(handle)
   switch (type) {
     case 'ig': {
-      const { data } = await instagram.posts(h, opts, token)
-      return mapList('ig', data)
+      const { data, credits_charged } = await instagram.posts(h, opts, token)
+      return { items: mapList('ig', data), credits: credits_charged }
     }
     case 'x': {
-      const { data } = await twitter.tweets(h, opts, token)
-      return mapList('x', data)
+      const { data, credits_charged } = await twitter.tweets(h, opts, token)
+      return { items: mapList('x', data), credits: credits_charged }
     }
     default:
       throw new Error(`fetchSocial: unsupported social type ${type} (yt uses native RSS)`)

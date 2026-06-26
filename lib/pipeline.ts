@@ -88,11 +88,15 @@ export async function runChannelPipeline(
   const activeIds = new Set(activeSources.map((s) => s.id))
 
   const raw: Raw[] = []
+  // Real per-run cost = sum of gateway scrape charges (IG/X) + the AI summary
+  // charge below. Free sources (rss/hn/reddit/arxiv/web/yt) contribute 0.
+  let scrapeCredits = 0
   await Promise.all(
     activeSources.map(async (s) => {
       const ms = SOURCE_TIMEOUT_MS[s.type] ?? DEFAULT_SOURCE_TIMEOUT_MS
       try {
-        const items = await withTimeout(fetchSource(s, channel, embedToken), ms, `source ${s.type}:${s.id}`)
+        const { items, credits } = await withTimeout(fetchSource(s, channel, embedToken), ms, `source ${s.type}:${s.id}`)
+        scrapeCredits += credits
         for (const it of items) raw.push({ ...it, source_id: s.id })
       } catch (e) {
         errors.push({ source_id: s.id, error: e instanceof Error ? e.message : String(e) })
@@ -227,13 +231,13 @@ export async function runChannelPipeline(
   })
   const top: Raw[] = picked.slice(0, TOP_N)
 
-  let credits_used = 0
+  let credits_used = scrapeCredits
   let summaries: string[] = top.map((t) => cleanShortSummary(t.summary))
   if (top.length >= 3) {
     try {
       const r = await summarizeBatch(top, channel.niche, embedToken)
       summaries = r.summaries
-      credits_used = r.credits
+      credits_used += r.credits
     } catch (e) {
       errors.push({ source_id: 'summarize', error: e instanceof Error ? e.message : String(e) })
     }

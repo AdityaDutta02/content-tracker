@@ -18,6 +18,7 @@ import {
 import { useViewer } from '@/hooks/use-viewer'
 import { hostname, faviconUrl, relativeTime, absoluteTime, cleanTitle, cleanSummary, copyUrl } from '@/lib/format'
 import { Badge, Button, MonoCaption, SourceGlyph } from '@/components/ui/primitives'
+import { dailyCostEstimate } from '@/lib/credits/cost'
 
 interface Channel {
   id: string
@@ -143,7 +144,8 @@ export default function ChannelPage() {
       if (!r.ok) {
         showToast(d.error ?? 'Refresh failed')
       } else {
-        showToast(d.item_count > 0 ? `Got ${d.item_count} fresh items` : 'Scan complete — still quiet')
+        const cost = typeof d.credits_used === 'number' ? ` · ${d.credits_used} credits` : ''
+        showToast(d.item_count > 0 ? `Got ${d.item_count} fresh items${cost}` : `Scan complete — still quiet${cost}`)
         setReloadKey((k) => k + 1)
       }
     } catch (e) {
@@ -275,8 +277,16 @@ export default function ChannelPage() {
     </div>
   )
 
-  const latestRunAt = [...runs].sort((a, b) => (a.run_at < b.run_at ? 1 : -1))[0]?.run_at ?? null
+  const latestRun = [...runs].sort((a, b) => (a.run_at < b.run_at ? 1 : -1))[0] ?? null
+  const latestRunAt = latestRun?.run_at ?? null
   const lastScan = latestRunAt ? relativeTime(latestRunAt) : 'never'
+
+  // Cost transparency: estimate the credits one daily refresh of this channel
+  // costs (paid social sources + 1 AI summary; free sources add nothing), and
+  // surface what the last refresh actually charged.
+  const enabledTypes = sources.filter((s) => s.enabled !== false).map((s) => s.type)
+  const dailyEstimate = dailyCostEstimate(enabledTypes)
+  const lastRunCredits = latestRun?.credits_used ?? null
 
   return (
     <main className="mx-auto max-w-prose px-6 pb-28 pt-12">
@@ -288,14 +298,25 @@ export default function ChannelPage() {
           <ArrowLeft className="h-3.5 w-3.5" strokeWidth={1.75} />
           All channels
         </Link>
-        <Button variant="outline" onClick={refresh} disabled={refreshing}>
-          {refreshing ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={1.75} />
-          ) : (
-            <RefreshCw className="h-3.5 w-3.5" strokeWidth={1.75} />
-          )}
-          {refreshing ? 'Scanning' : 'Refresh'}
-        </Button>
+        <div className="flex items-center gap-3">
+          <MonoCaption
+            title={
+              lastRunCredits != null
+                ? `Last refresh charged ${lastRunCredits} credits. Free sources (RSS, Reddit, YouTube) cost nothing; only Instagram (3) and X (2) scrapes do.`
+                : `Each refresh costs about ${dailyEstimate} credits — free sources are free, Instagram is 3 and X is 2 per refresh, plus 1 for the AI summary.`
+            }
+          >
+            {lastRunCredits != null ? `${lastRunCredits} cr last refresh` : `~${dailyEstimate} cr / refresh`}
+          </MonoCaption>
+          <Button variant="outline" onClick={refresh} disabled={refreshing}>
+            {refreshing ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={1.75} />
+            ) : (
+              <RefreshCw className="h-3.5 w-3.5" strokeWidth={1.75} />
+            )}
+            {refreshing ? 'Scanning' : 'Refresh'}
+          </Button>
+        </div>
       </div>
 
       <div className="mt-7">
@@ -308,6 +329,11 @@ export default function ChannelPage() {
             {channel.target_group ?? channel.description}
           </p>
         )}
+        <MonoCaption className="mt-3" title="Runs once daily. Free sources cost nothing; only Instagram (3 cr) and X (2 cr) scrapes are charged, plus 1 cr for the AI summary.">
+          {dailyEstimate <= 1
+            ? 'Free to run · ~1 cr/day for the AI summary'
+            : `~${dailyEstimate} credits/day · refreshes once daily`}
+        </MonoCaption>
       </div>
 
       <div className="mt-9 flex items-center gap-7 border-b border-line">
