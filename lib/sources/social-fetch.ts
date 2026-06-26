@@ -1,16 +1,19 @@
-// Social fetch — single managed path via the Terminal AI gateway.
+// Social fetch — managed gateway path for IG / X.
 //
-// The gateway scrapes IG / X / YT behind one normalized shape (ScrapeCreators
+// The gateway scrapes IG / X behind one normalized shape (ScrapeCreators
 // primary, Apify failover, managed for us). No more tier probing, dead RSSHub
 // mirrors, BYOK keys, or hand-rolled actor inputs — one call per source,
 // normalized post out. Scraping is owner-only, so the caller must pass an
 // owner-scoped token (cron task token or owner embed token).
 //
+// YouTube is NOT here — it's fetched via free public RSS (see lib/sources/youtube.ts).
 // FB / LinkedIn are intentionally NOT scraped by this app (see lib/sources/limits.ts).
 import type { FetchedItem, SourceType } from '../types'
-import { instagram, youtube, twitter, type SocialPost, type SocialList } from '../scrape-sdk'
+import { instagram, twitter, type SocialPost, type SocialList } from '../scrape-sdk'
 
-// The handle-based social sources the pipeline counts toward its social quota.
+// The handle-based social source types the pipeline counts toward its social
+// quota. YT is included for capping/detection, but is fetched via native RSS,
+// not this gateway path.
 export type SocialPlatform = 'x' | 'ig' | 'yt'
 
 const LIST_LIMIT = 25
@@ -49,8 +52,9 @@ function mapList(type: SourceType, list: SocialList): FetchedItem[] {
 }
 
 /**
- * Fetch recent items for a social source (IG/X/YT) via the gateway. `handle` is
- * the account handle. Throws on gateway failure — the pipeline records it.
+ * Fetch recent items for a gateway-scraped social source (IG/X). `handle` is the
+ * account handle. Throws on gateway failure — the pipeline records it. YouTube is
+ * fetched separately via native RSS (lib/sources/youtube.ts), not here.
  */
 export async function fetchSocial(
   type: SourceType,
@@ -68,13 +72,7 @@ export async function fetchSocial(
       const { data } = await twitter.tweets(h, opts, token)
       return mapList('x', data)
     }
-    case 'yt': {
-      // No "channel videos" gateway op — search by the channel handle returns
-      // that channel's recent uploads, newest-first.
-      const { data } = await youtube.search(h, opts, token)
-      return mapList('yt', data)
-    }
     default:
-      throw new Error(`fetchSocial: unsupported social type ${type}`)
+      throw new Error(`fetchSocial: unsupported social type ${type} (yt uses native RSS)`)
   }
 }

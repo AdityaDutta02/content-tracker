@@ -5,10 +5,12 @@ import { fetchReddit } from './reddit'
 import { fetchArxiv } from './arxiv'
 import { fetchWeb } from './web'
 import { fetchSocial } from './social-fetch'
+import { fetchYoutubeNative } from './youtube'
 
-// embedToken authenticates gateway calls. Social sources scrape via the gateway
+// embedToken authenticates gateway calls. IG/X scrape via the gateway
 // (owner-only), so the token is REQUIRED for them — the pipeline passes the cron
-// task token (owner identity) or the owner's embed token.
+// task token (owner identity) or the owner's embed token. YouTube is fetched via
+// its free public RSS feed instead, so it needs no token and burns no credits.
 export async function fetchSource(
   source: SourceRow,
   channel: ChannelRow,
@@ -30,9 +32,18 @@ export async function fetchSource(
         tier: cfg.tier as 'cheerio' | 'jina' | 'firecrawl',
         firecrawl_key: channel.scraper_byok_key ?? undefined,
       })
-    case 'x':
-    case 'ig':
     case 'yt': {
+      // Free public RSS — no gateway, no credits. Resolve the channel id once
+      // and cache it back so later runs skip the resolution HTTP hop.
+      const handle = source.handle ?? source.url ?? ''
+      const { items, channelId } = await fetchYoutubeNative(handle, cfg.channel_id as string | undefined)
+      if (channelId && channelId !== cfg.channel_id) {
+        source.scrape_config = { ...cfg, channel_id: channelId, feed_url: `https://www.youtube.com/feeds/videos.xml?channel_id=${channelId}` }
+      }
+      return items
+    }
+    case 'x':
+    case 'ig': {
       if (!embedToken) throw new Error(`${source.type} source needs a gateway token (owner-only scrape)`)
       const handle = source.handle ?? source.url ?? ''
       return fetchSocial(source.type, handle, embedToken)

@@ -71,12 +71,10 @@ test('fetchSocial: ig hits instagram/posts, strips @, maps items', async () => {
   assert.equal(items[0].external_id, 'ig:1')
 })
 
-test('fetchSocial: yt searches by handle (no channel-videos op)', async () => {
+test('fetchSocial: yt is not a gateway path (native RSS handles it)', async () => {
   mockGateway([])
-  await fetchSocial('yt', 'mkbhd', 'tok')
-  assert.equal(calls[0].url, 'https://gw.test/scrape/youtube')
-  assert.equal(calls[0].body?.operation, 'search')
-  assert.equal(calls[0].body?.query, 'mkbhd')
+  await assert.rejects(fetchSocial('yt' as 'ig', 'mkbhd', 'tok'), /unsupported social type/)
+  assert.equal(calls.length, 0)
 })
 
 test('fetchSocial: x hits twitter/tweets', async () => {

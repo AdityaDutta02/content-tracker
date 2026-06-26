@@ -4,6 +4,7 @@ import { cheerioExtractDetailed, jinaExtract } from './web'
 import { scoreSample } from './quality'
 import type { FetchedItem } from '../types'
 import { rsshubFor } from './rsshub'
+import { resolveYoutubeChannelId } from './youtube'
 import type { SocialPlatform } from './social-fetch'
 
 interface KnownMatch {
@@ -48,12 +49,43 @@ function matchKnownPlatform(input: string): KnownMatch | null {
   return null
 }
 
-// Social handles all resolve through the managed gateway scrape path, so there's
-// no tier probing to do — the handle is accepted and marked healthy. The gateway
-// fetch is owner-only and costs credits at run time, but the user supplies no key
-// of their own, so from the add-source UX this is a no-setup ('free') source.
+// IG/X resolve through the managed gateway scrape path (owner-only, paid at run
+// time). YouTube resolves to its free public RSS feed: we resolve the @handle to
+// a UC… channel id once here and cache it + the feed_url so runtime fetches are
+// a plain RSS GET with no gateway credits. The user supplies no key either way,
+// so from the add-source UX every social source is no-setup ('free').
 async function detectSocial(platform: SocialPlatform, rawHandle: string): Promise<DetectionResult> {
   const handle = rawHandle.trim().replace(/^@/, '')
+
+  if (platform === 'yt') {
+    const channelId = await resolveYoutubeChannelId(handle)
+    if (channelId) {
+      const feedUrl = `https://www.youtube.com/feeds/videos.xml?channel_id=${channelId}`
+      return {
+        type: 'yt',
+        handle,
+        scrape_config: { fetch_tier: 'native', channel_id: channelId, feed_url: feedUrl },
+        tier: 'platform',
+        available_tiers: ['native'],
+        recommended_tier: 'native',
+        cost: 'free',
+        health: 'ok',
+      }
+    }
+    // Couldn't resolve now (private/renamed/blocked) — still accept; runtime
+    // retries resolution. Flag 'low' so the picker shows it as unverified.
+    return {
+      type: 'yt',
+      handle,
+      scrape_config: { fetch_tier: 'native' },
+      tier: 'platform',
+      available_tiers: ['native'],
+      recommended_tier: 'native',
+      cost: 'free',
+      health: 'low',
+    }
+  }
+
   return {
     type: platform,
     handle,
