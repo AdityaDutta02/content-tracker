@@ -286,7 +286,6 @@ export default function ChannelPage() {
   // surface what the last refresh actually charged.
   const enabledTypes = sources.filter((s) => s.enabled !== false).map((s) => s.type)
   const dailyEstimate = dailyCostEstimate(enabledTypes)
-  const lastRunCredits = latestRun?.credits_used ?? null
 
   return (
     <main className="mx-auto max-w-prose px-6 pb-28 pt-12">
@@ -298,25 +297,14 @@ export default function ChannelPage() {
           <ArrowLeft className="h-3.5 w-3.5" strokeWidth={1.75} />
           All channels
         </Link>
-        <div className="flex items-center gap-3">
-          <MonoCaption
-            title={
-              lastRunCredits != null
-                ? `Last refresh charged ${lastRunCredits} credits. Free sources (RSS, Reddit, YouTube) cost nothing; only Instagram (3) and X (2) scrapes do.`
-                : `Each refresh costs about ${dailyEstimate} credits — free sources are free, Instagram is 3 and X is 2 per refresh, plus 1 for the AI summary.`
-            }
-          >
-            {lastRunCredits != null ? `${lastRunCredits} cr last refresh` : `~${dailyEstimate} cr / refresh`}
-          </MonoCaption>
-          <Button variant="outline" onClick={refresh} disabled={refreshing}>
-            {refreshing ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={1.75} />
-            ) : (
-              <RefreshCw className="h-3.5 w-3.5" strokeWidth={1.75} />
-            )}
-            {refreshing ? 'Scanning' : 'Refresh'}
-          </Button>
-        </div>
+        <Button variant="outline" onClick={refresh} disabled={refreshing}>
+          {refreshing ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={1.75} />
+          ) : (
+            <RefreshCw className="h-3.5 w-3.5" strokeWidth={1.75} />
+          )}
+          {refreshing ? 'Scanning' : 'Refresh'}
+        </Button>
       </div>
 
       <div className="mt-7">
