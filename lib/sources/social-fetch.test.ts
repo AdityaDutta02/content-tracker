@@ -27,11 +27,11 @@ function fakeRes(body: unknown): Response {
 }
 
 // Every social fetch resolves to one inline-done gateway response carrying items.
-function mockGateway(items: Partial<SocialPost>[]): void {
+function mockGateway(items: Partial<SocialPost>[], creditsCharged = 0): void {
   calls = []
   globalThis.fetch = (async (url: string | URL | Request, opts: RequestInit = {}) => {
     calls.push({ url: String(url), body: opts.body ? JSON.parse(opts.body as string) : null })
-    return fakeRes({ status: 'done', data: { items }, credits_charged: 0 })
+    return fakeRes({ status: 'done', data: { items }, credits_charged: creditsCharged })
   }) as typeof fetch
 }
 
@@ -62,13 +62,14 @@ test('mapSocialPost: empty text falls back to a placeholder title', () => {
   assert.equal(item.summary, '')
 })
 
-test('fetchSocial: ig hits instagram/posts, strips @, maps items', async () => {
-  mockGateway([{ platform: 'instagram', id: '1', text: 'hi', url: 'u' }])
-  const items = await fetchSocial('ig', '@nasa', 'tok')
+test('fetchSocial: ig hits instagram/posts, strips @, maps items + reports credits', async () => {
+  mockGateway([{ platform: 'instagram', id: '1', text: 'hi', url: 'u' }], 3)
+  const { items, credits } = await fetchSocial('ig', '@nasa', 'tok')
   assert.equal(calls[0].url, 'https://gw.test/scrape/instagram')
   assert.equal(calls[0].body?.operation, 'posts')
   assert.equal(calls[0].body?.handle, 'nasa')
   assert.equal(items[0].external_id, 'ig:1')
+  assert.equal(credits, 3)
 })
 
 test('fetchSocial: yt is not a gateway path (native RSS handles it)', async () => {

@@ -29,8 +29,8 @@ Add-source: detect route → `detectSource(input)` [detect.ts] → `assertCanAdd
 | arxiv | fetchArxiv | arxiv.ts | free |
 | web | fetchWeb (cheerio→jina→firecrawl) | web.ts, jina.ts, firecrawl.ts | free / byok |
 | **yt** | **fetchYoutubeNative** | **youtube.ts** | **free (public Atom RSS)** |
-| ig | fetchSocial→instagram.posts | social-fetch.ts → scrape-sdk.ts | gateway, 11 cr |
-| x | fetchSocial→twitter.tweets | social-fetch.ts → scrape-sdk.ts | gateway, 8 cr |
+| ig | fetchSocial→instagram.posts | social-fetch.ts → scrape-sdk.ts | gateway, 3 cr (list) |
+| x | fetchSocial→twitter.tweets | social-fetch.ts → scrape-sdk.ts | gateway, 2 cr (single-entity) |
 | fb / linkedin | return [] (not scraped) | — | — |
 
 ### YouTube = native RSS (NOT gateway)  [lib/sources/youtube.ts]
@@ -53,9 +53,14 @@ Add-source: detect route → `detectSource(input)` [detect.ts] → `assertCanAdd
 Clients: `instagram` (profile/posts/reels), `youtube` (channel/search — **unused now**, YT is native),
 `twitter` (profile/tweets), `facebook`, `linkedin`. Lazy `gatewayUrl()` for testability.
 
-## Costs (per once-daily run)
-- ig 11, x 8 (gateway). yt/rss/web/reddit/hn/arxiv = 0. +1 AI summarize (chat/fast, ~1-3 cr).
-- Refresh-run ceiling ~46 (4×ig). Detect/source-finding = 0 (pure local heuristics).
+## Costs (per once-daily run) — gateway pricing verified 2026-06-26
+- Scrape (flat per source+op): ig posts=3, x tweets=2, profile/channel/single=2, search/comments/hashtag/heavy=4, reddit=3. **Any cross-user cache hit = 1.** `force_fresh:true` bypasses cache, pays full.
+- AI summarize: callGateway chat/fast = gpt-4o-mini = **1 cr**, 1 call/run. (chat/good haiku=4, chat/quality sonnet=6 — NOT used.)
+- yt/rss/web/hn/arxiv = 0. reddit via direct json = 0 (NOT the gateway reddit op).
+- Per-run: free-only=1, all-X(4×2)=9, typical(2ig+2x)=11, max-social(4×ig)=13. Detect/source-finding=0 (local heuristics).
+- **Metering (truthful cost):** `fetchSocial`/`fetchSource` return `{items, credits}`; pipeline sums scrape `credits_charged` + AI into `runs.credits_used` (was AI-only before). `refresh` route returns it.
+- **lib/credits/cost.ts** — UI source of truth for per-source cost: `SOURCE_CREDIT_COST{ig:3,x:2,…0}`, `costForSourceType`, `costLabel`, `dailyCostEstimate(types)` = Σ paid + 1 AI.
+- **Transparency UI (no budget tracking — user decides):** feed page shows `{n} cr last refresh` beside Refresh + `~N credits/day` under title + credits in refresh toast; add-source shows `{n} cr / refresh` badge + line per source.
 
 ## Other lib
 - types.ts — SourceType, FetchTier(`native|rsshub|apify|gateway`), FetchedItem, SourceRow, ChannelRow, DetectionResult.

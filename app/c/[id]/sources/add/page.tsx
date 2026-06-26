@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { ArrowLeft, Globe, Loader2 } from 'lucide-react'
 import { useViewer } from '@/hooks/use-viewer'
 import { Badge, Button, MonoCaption } from '@/components/ui/primitives'
+import { costForSourceType } from '@/lib/credits/cost'
 
 interface Detection {
   type: string
@@ -145,8 +146,21 @@ export default function AddSourcePage() {
             <div className="flex flex-wrap items-center gap-2">
               <Badge>{detection.type}</Badge>
               <CostBadge d={detection} />
+              {costForSourceType(detection.type) > 0 ? (
+                <Badge tone="warn">{costForSourceType(detection.type)} cr / refresh</Badge>
+              ) : (
+                <Badge muted>0 cr / refresh</Badge>
+              )}
               {detection.needs_byok && detection.type === 'web' && <Badge muted>needs Firecrawl key</Badge>}
             </div>
+
+            <p className="text-[12.5px] leading-relaxed text-ink-3">
+              {costForSourceType(detection.type) > 0
+                ? `${detection.type === 'ig' ? 'Instagram' : detection.type === 'x' ? 'X' : 'This'} sources scrape through the paid gateway — ${costForSourceType(
+                    detection.type,
+                  )} credits each time this channel refreshes (once daily).`
+                : 'Free to fetch — this source never charges credits, no matter how often it refreshes.'}
+            </p>
 
             {detection.sample && (
               <div className="text-[13px] text-ink-3">
